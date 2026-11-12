@@ -1,0 +1,12 @@
+[package]
+name = "async_test"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+# NVIDIA's CUDA Rust (cuda-oxide), pinned to the commit tested here.
+[dependencies]
+cuda-core = { git = "https://github.com/NVIDIA/cuda-rust.git", rev = "11edcb6b153914bedc76643866d98babfd24b7c9" }
+cuda-device = { git = "https://github.com/NVIDIA/cuda-rust.git", rev = "11edcb6b153914bedc76643866d98babfd24b7c9" }
+cuda-host = { git = "https://github.com/NVIDIA/cuda-rust.git", rev = "11edcb6b153914bedc76643866d98babfd24b7c9" }

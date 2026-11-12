@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Runs a shell command on a Colab session and prints its output and exit code.
+# The Colab kernel only shows Python-level output, so the command runs through
+# subprocess and its captured output is printed from Python.
+# Usage: colab_sh <session> '<shell command>'
+set -euo pipefail
+session=$1; shift
+cmd=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$*")
+colab exec -s "$session" --timeout "${COLAB_SH_TIMEOUT:-1800}" <<EOF
+import subprocess, sys
+r = subprocess.run($cmd, shell=True, capture_output=True, text=True, executable="/bin/bash")
+print(r.stdout + r.stderr, end="")
+print(f"[exit {r.returncode}]")
+EOF
