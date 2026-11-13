@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1. The journey of a + b · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+  .anim { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 22px 0; overflow: hidden; }
+  .anim .widget-body svg { width: 100%; height: auto; display: block; }
+  /* journey */
+  .jr-map { display: flex; gap: 3px; padding: 10px 12px 4px; }
+  .jr-map i { flex: 1; height: 8px; border-radius: 3px; opacity: .25; cursor: pointer; transition: opacity .3s, transform .3s; }
+  .jr-map i.on { opacity: 1; transform: scaleY(1.6); } .jr-map i.past { opacity: .6; }
+  .jr-cap { padding: 8px 14px 10px; font-size: 14px; color: #c9d2dc; min-height: 3.2em; }
+  .jr-cap b { color: #fff; font: 600 14px var(--mono); }
+  #journey pre.code { height: 400px; max-height: 400px; }
+  #journey .ln.add { animation: jrIn .7s ease both; }
+  @keyframes jrIn { from { opacity: 0; transform: translateX(-14px); background: rgba(74, 222, 128, .35); } to { opacity: 1; transform: none; } }
+  #journey pre.code.out .ln { transition: opacity .25s; opacity: .15; }
+  /* range splitter */
+  .sp-name { font: 700 30px var(--mono); text-align: center; padding: 6px 0 2px; letter-spacing: .02em; }
+  .sp-name span { transition: opacity .5s; }
+  .sp-expr { font: 14px var(--mono); text-align: center; color: #dfe6ee; padding: 2px 10px 12px; min-height: 2.6em; }
+  .c-g { color: #60a5fa; } .c-l { color: #22d3ee; } .c-u { color: #fbbf24; } .c-k { color: #6e7b8b; }
+  /* grid */
+  .gd-ctl { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 13px; }
+  .gd-ctl label { display: flex; gap: 8px; align-items: center; }
+  .gd-ctl input[type=range] { width: 180px; }
+  .gd-math { font: 13px/1.7 var(--mono); padding: 10px 14px; border-top: 1px solid var(--line); background: #0a0e14; color: #dfe6ee; white-space: pre-wrap; }
+  .gd-math .hl { color: #fbbf24; }
+  /* decode table */
+  table.decode td:first-child { font: 600 14px var(--mono); }
+  .sass-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .sass-pair > div { min-width: 0; }
+  @media (max-width: 1000px) { .sass-pair { grid-template-columns: 1fr; } }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 1</div><h1>The journey of a + b</h1>
+  <p class="lede">We follow a single elementwise add of two 1024×1024 float32 tensors through every stage of tinygrad on an NVIDIA L4: the lazy graph, the scheduler, each named compiler pass, the kernel name <code>E_8192_32_4</code>, CUDA C, PTX, the 19 SASS instructions the GPU runs, and the launch of 8192 blocks. Then we watch PyTorch do the same add twice, once with a prebuilt kernel and once with a Triton kernel it writes on the fly, and compare the machine code. Later chapters zoom in on each stage. This one is the map.</p>
+  <div class="pipeline"></div>
+
+  <h2>Fourteen characters of Python</h2>
+  <p>Here is the program, as the capture harness ran it (<code>harness/examples.py</code>):</p>
+  <pre class="code static" data-lang="python">
+from tinygrad import Tensor
+a = Tensor(np_a).realize()      # 1024 x 1024 float32, copied to the L4
+b = Tensor(np_b).realize()
+c = a + b                       # builds a graph node; no GPU work
+c.realize()                     # schedule -> codegen -> compile -> launch
+</pre>
+  <p>The line <code>c = a + b</code> does not add anything. <code>Tensor.__add__</code> (<a class="src" data-src="tinygrad/mixin/elementwise.py#L263"></a>) goes through <code>_binop</code> (<a class="src" data-src="tinygrad/mixin/elementwise.py#L32"></a>), which promotes dtypes and calls <code>alu(Ops.ADD, …)</code>. That wraps a new <code>UOp</code> in a new <code>Tensor</code>. A tinygrad <code>Tensor</code> is only a handle: its slots are <code>uop</code>, <code>is_param</code> and <code>grad</code> (<a class="src" data-src="tinygrad/tensor.py#L285"></a>). All the information lives in the UOp graph it points to. The capture printed that graph just before <code>realize()</code>:</p>
+  <div class="anim"><div class="widget-head"><span class="title">add/default · tensor_graph (pyrender of c.uop before realize)</span></div><pre class="code" id="tgraph"></pre></div>
+  <p>Read it bottom up. <code>c7</code> is the ADD. Its two sources are <code>RESHAPE</code>s of two <code>BUFFER</code>s. A buffer in tinygrad is always one-dimensional, here 1,048,576 floats on <code>'CUDA'</code>, and a <code>RESHAPE</code> whose shape is itself a UOp (<code>c3</code>, a <code>STACK</code> of two constants) gives it the shape 1024×1024. There is no stride, no view object and no ShapeTracker: tinygrad 0.14 keeps movement ops as ordinary nodes until the scheduler turns them into arithmetic. <code>.realize()</code> (<a class="src" data-src="tinygrad/tensor.py#L420"></a>) is where the compiler starts.</p>
+
+  <h2>The whole journey in one animation</h2>
+  <p>Before going through the stages one by one, watch the artifact change shape. Each step below is a real snapshot from the capture, the IR exactly as tinygrad held it after that stage, with the lines that are new since the previous step sliding in. Press play and watch three things happen. The two nested loops of 1024 merge into one loop of 1,048,576 and are then split into 8192 × 32 × 4. The loop variables become <code>gidx0</code> and <code>lidx0</code>, the hardware's block and thread indices. And four scalar loads become one 16-byte vector load.</p>
+  <div class="anim" id="journey"></div>
+
+  <h2>Scheduling: from a graph to one kernel</h2>
+  <p>The scheduler's job is to turn "a graph of tensor operations" into "a list of kernels, each a loop nest with loads and stores". For <code>a + b</code> the answer is obviously one kernel, but it goes through the same machinery as softmax (three kernels) or a matmul.</p>
+  <p><code>realize()</code> calls <code>linear_with_vars</code> (<a class="src" data-src="tinygrad/tensor.py#L404"></a>), which runs two groups of passes:</p>
+  <ol>
+    <li><b>Callify</b> (<code>transform_to_call</code>, <a class="src" data-src="tinygrad/tensor.py#L224"></a>). <em>number the uops</em> tags the output. <em>early transform tensor graph</em> turns "the value of <code>c</code>" into "allocate a new buffer and STORE the ADD into it": that is the <code>c4.after(c4.store(c9))</code> line in the journey. <em>replace bufs</em> swaps the concrete buffers for numbered <code>PARAM</code> slots 0, 1, 2. The output is slot 0. After this pass the graph no longer mentions which memory it runs on, so it can be cached and reused as a schedule.</li>
+    <li><b>Schedule</b> (<code>create_linear_with_vars</code>, <a class="src" data-src="tinygrad/schedule/__init__.py#L181"></a>), whose core is <code>get_kernel_graph</code> (<a class="src" data-src="tinygrad/schedule/rangeify.py#L585"></a>). <em>apply rangeify</em> gives every node a tuple of <code>RANGE</code> loop variables. The output gets two fresh ranges, <code>r0</code> (rows) and <code>r1</code> (columns). Each RESHAPE pushes them back to its 1-D buffer as <code>r0*1024+r1</code>, and then the RESHAPE is deleted. <em>stage to store</em> and <em>split kernels</em> cut the graph at every STORE with no open loops. There is exactly one here, so there is one kernel.</li>
+  </ol>
+  <p>You can watch rangeify decide this with <code>DEBUG_RANGEIFY=1</code>. Run on the CPU against the NULL device (chapter 11 explains the trick), it prints one row per node: the number of consumers, the op, the shape, and the ranges the node is indexed with. <code>***</code> marks nodes that must be materialized:</p>
+  <pre class="code static" data-lang="text">
+***  0 Ops.STORE            (1024, 1024)                         0 [r0][r1]
+     1 Ops.ADD              (1024, 1024)                         0 [r0][r1]
+     1 Ops.RESHAPE          (1024, 1024)                         0 [(r0*1024+r1)] -> [r0][r1]
+     1 Ops.PARAM            (1048576,)                           0 [(r0*1024+r1)]
+     1 Ops.RESHAPE          (1024, 1024)                         0 [(r0*1024+r1)] -> [r0][r1]
+     1 Ops.PARAM            (1048576,)                           0 [(r0*1024+r1)]
+     ...
+</pre>
+  <p>Every value node (the ADD, the RESHAPEs, the input PARAMs) has exactly one consumer, so each one inherits its consumer's ranges and fuses into it (<a class="src" data-src="tinygrad/schedule/indexing.py#L188"></a>). Only the STORE starts new loops. Chapter 3 shows what happens when a node has two consumers that disagree, and the result is a second kernel.</p>
+  <p>Here is the kernel AST that reaches codegen, from the capture:</p>
+  <div class="kernel-view" data-key="add/default" data-tabs="ast" data-tab="ast" data-title="Kernel 0 as handed to codegen (DEBUG=5 prints exactly this)"></div>
+  <p>This is the whole program in tinygrad's vocabulary. <code>PARAM</code> 0, 1 and 2 are the output and the two inputs, each a flat array of 1,048,576 floats. <code>c3</code> and <code>c5</code> are two loops of 1024 with axis type <code>WEAK</code>, meaning "an output loop that codegen may map to hardware however it likes". <code>c6 = c3*1024+c5</code> is the flat index. <code>c12</code> loads both inputs at that index and adds them (an <code>INDEX</code> stands for its load; explicit <code>LOAD</code> ops are added later). <code>c14</code> stores to the output at the same index and <code>end</code>s both loops. The <code>KernelInfo</code> name is still <code>'test'</code>.</p>
+
+  <h2>Every pass, in order</h2>
+  <p>From here to the CUDA source there are 52 named <code>graph_rewrite</code> passes in this capture: 4 on the tensor graph, 17 in the scheduler, 30 in codegen, and one on the runtime side. The stepper shows them all. Bar height is the graph size after each pass, and faded bars are passes that found nothing to do for <code>a + b</code>, which is most of them: there is no reduction, no shared memory and no exotic dtype. Click through the changed passes. The short description under the pass name comes from the source.</p>
+  <div class="pass-stepper" data-key="add/default" data-kernel="all"></div>
+  <p>Notice where the node count jumps. <em>devectorize2</em> takes the graph from 29 to 50 UOps because it splits the 4-wide vector into four scalar loads, adds and stores. <em>add images</em>, which is where <code>memory_coalescing</code> runs just before it (<a class="src" data-src="tinygrad/codegen/__init__.py#L344"></a>), takes it back down to 39 by gluing the four scalar loads into one 4-wide <code>SHRINK</code> load. <em>casted consts</em> adds a <code>CAST</code> for every constant. The interesting decisions, though, happen in a step that is not a named rewrite at all: <code>apply_opts</code>.</p>
+
+  <h2>Choosing the launch shape: UPCAST 4, LOCAL 32</h2>
+  <p>After <em>simplify ranges</em> has merged the two loops into one of 1,048,576 (<a class="src" data-src="tinygrad/codegen/simplify.py#L23"></a>, since <code>r0*1024+r1</code> over a 1024×1024 range is just a counter), the optimizer decides how to map that loop onto the GPU. <code>apply_opts</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L334"></a>) first turns the WEAK range into a <code>GLOBAL</code> one (<code>convert_loop_to_global</code>, <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L70"></a>), then runs the hand-coded heuristics. The capture records what they chose:</p>
+  <pre class="code static" data-lang="python">
+applied_opts = (Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32))
+</pre>
+  <p>Every opt is a call to <code>shift_to</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L90"></a>). It splits a range of size N into an outer range of N/amount and a new inner range of size <code>amount</code> with a new axis type, and substitutes <code>old → outer*amount + inner</code> everywhere. Step through it:</p>
+  <div class="anim" id="splitter"></div>
+  <p><b>Why UPCAST 4?</b> An UPCAST axis is not a loop at runtime. Each thread does all of its iterations, so the four consecutive floats become one 16-byte vector. Running DEBUG=4 against the NULL device shows where it came from: the heuristic printed <code>more upcast axis : [(0, 3, 0, 4)]</code>. That is the upcast loop in <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L114"></a>, whose tuples are <code>(num_strides, sum_strides, axis, amount)</code>. The loop is meant to find axes that some buffer <em>broadcasts</em> over (stride 0), the classic case being the M and N axes of a matmul. It qualifies an axis when the range is not in a buffer index's <code>backward_slice</code>. Here every index <em>is</em> the bare range, and <code>backward_slice</code> excludes the node itself (<a class="src" data-src="tinygrad/uop/ops.py#L277"></a>), so all three buffers pass the test. Upcasting by 3 does not divide 1,048,576, so the only candidate is 4. On the next iteration the axis is already upcast and the loop stops. We checked this by instrumenting the heuristic on the CPU: all three indices are the range itself. If the loop had not fired, the fallback a few lines later (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L156"></a>, "if nothing at all is upcasted… do an upcast" by 4) would have produced the same opt.</p>
+  <p><b>Why LOCAL 32?</b> The locals step (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L160"></a>) tries sizes from <code>[32]*(axis==0) + [16, 8, 4, 3, 2]</code> and keeps the first one that divides the axis while the total stays ≤ 128 (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L172"></a>). Axis 0 gets first pick and 32 divides 262,144, so each block has 32 threads: exactly one warp. That is a small block, and we come back to the cost at the end of the chapter.</p>
+
+  <h2>Reading the name E_8192_32_4</h2>
+  <p><code>get_optimized_ast</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L50"></a>) names the kernel from its axes: <code>"r"</code> if there is a reduction, else <code>"E"</code>, then one number per axis in a fixed order (globals, then locals, then upcasts, then reduce and unroll axes), colored by axis type in the terminal.</p>
+  <table class="decode">
+    <tr><th>Part</th><th>Axis type</th><th>Meaning on the GPU</th></tr>
+    <tr><td>E</td><td>no REDUCE</td><td>elementwise kernel</td></tr>
+    <tr><td class="c-g">8192</td><td>GLOBAL (blue)</td><td><code>gidx0 = blockIdx.x</code>: 8192 blocks in the grid</td></tr>
+    <tr><td class="c-l">32</td><td>LOCAL (cyan)</td><td><code>lidx0 = threadIdx.x</code>: 32 threads per block</td></tr>
+    <tr><td class="c-u">4</td><td>UPCAST (yellow)</td><td>4 consecutive floats per thread, held in registers as one <code>float4</code></td></tr>
+  </table>
+  <p>8192 × 32 × 4 = 1,048,576, one entry per element of <code>c</code>. Every other contiguous elementwise example in the book (<code>fused_chain</code>, <code>gelu</code>, <code>exp</code>, <code>sin</code>, <code>int_divmod</code>) has the same 1,048,576 output elements, gets the same opts, and so has the same name. Only the body differs. The colors survive in the IR as ANSI escapes inside <code>KernelInfo(name='E\x1b[90m_\x1b[0m\x1b[34m8192…')</code>, which is why the pass stepper shows them. The function name in C is stripped of them (<code>function_name</code>).</p>
+
+  <h2>From loops back to hardware</h2>
+  <p>The remaining codegen passes "lower" the optimized graph until each UOp corresponds to one statement of C. Use the pass stepper above to see each of these:</p>
+  <ul>
+    <li><b>postopt symbolic</b> simplifies <code>(g*32+l)*4+u</code> to <code>g*128 + l*4 + u</code>.</li>
+    <li><b>expander</b> (<a class="src" data-src="tinygrad/codegen/__init__.py#L322"></a>) removes the UPCAST range. In its place is a vector constant <code>STACK(0, 1, 2, 3)</code>, so the index becomes a 4-wide vector and so does every value computed from it. The loop over 4 is now data parallelism inside one thread.</li>
+    <li><b>add gpudims</b> (<a class="src" data-src="tinygrad/codegen/gpudims.py#L41"></a>) replaces the GLOBAL range with <code>UOp.special(8192, 'gidx0')</code> and the LOCAL range with <code>UOp.special(32, 'lidx0')</code>. These SPECIAL ops will render as <code>blockIdx.x</code> and <code>threadIdx.x</code>.</li>
+    <li><b>*** expand broadcast / add loads</b> inserts explicit <code>.load()</code>s. <b>devectorize2</b> splits every 4-wide op into four scalars (<a class="src" data-src="tinygrad/codegen/__init__.py#L123"></a>), and <b>memory coalescing</b> regroups the four scalar loads at <code>base+0..3</code> into a single 4-wide <code>SHRINK</code> load. It can do that because the base is a multiple of 4, which is what lets the CUDA renderer emit a <code>float4</code>.</li>
+    <li><b>lower all index dtypes</b> commits the abstract <code>weakint</code> index type to 32-bit <code>int</code>, since 1,048,576 fits.</li>
+    <li><b>late decompositions</b> rewrites multiplications by powers of two as shifts: <code>gidx0*128</code> becomes <code>gidx0&lt;&lt;7</code> and <code>lidx0*4</code> becomes <code>lidx0&lt;&lt;2</code>.</li>
+    <li><b>linearize/render</b> toposorts the graph into 47 uops, prints the C, and calls the compiler.</li>
+  </ul>
+
+  <h2>The linear program and the CUDA C</h2>
+  <p>Here are all the stages of the finished kernel in one place. Start with the <b>Source</b> tab:</p>
+  <div class="kernel-view" data-key="add/default" data-tabs="uops,source,ptx,sass,ptxas" data-tab="source" data-highlight="alu0|float4|ld.global.v4|st.global.v4|LDG|STG|Used"></div>
+  <p>Each line of C maps to a few uops. <code>int gidx0 = blockIdx.x; /* 8192 */</code> is SPECIAL uop 7, with its bound in a comment. <code>alu0 = ((gidx0&lt;&lt;7)+(lidx0&lt;&lt;2))</code> is uops 17 to 19: two <code>SHL</code>s and an <code>ADD</code>. It gets a name because three loads and stores use it, and single-use expressions are inlined. The two <code>float4</code> loads are the <code>SHRINK</code> + <code>LOAD</code> pairs at uops 20 to 23. The <code>make_float4</code> store at the end is uops 26 to 44: eight <code>INDEX</code>es pick lanes out of the two float4s, four <code>ADD</code>s add them, then a <code>STACK</code> rebuilds the vector, and a <code>SHRINK</code> and a <code>STORE</code> write it. The prefix (<code>typedef unsigned int uint</code>, <code>INFINITY</code>, <code>tg_bitcast</code>) is emitted for every CUDA kernel. <code>__launch_bounds__(32)</code> is the product of the local sizes (<a class="src" data-src="tinygrad/renderer/cstyle.py#L156"></a>), and it tells the compiler no block will ever have more than 32 threads.</p>
+  <p>In the <b>Linear uops</b> tab you can see the effect of <em>casted consts</em>: every constant appears as a <code>CONST weakint</code> plus a <code>CAST int</code>, for example uops 5 and 6 (8192). The small constants near the end (0, 1, 3, plus the 2 reused from uop 12) are lane numbers inside the float4.</p>
+
+  <h2>PTX and SASS</h2>
+  <p>On the CUDA device, tinygrad's compiler is NVRTC (<a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L46"></a>), called with <code>--gpu-architecture=sm_89</code>, CUDA <code>-I</code> include paths and, on new versions, <code>--minimal</code> (<a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L51"></a>), and <b>asked for PTX, not a cubin</b>. Switch the widget to <b>PTX</b>. PTX is a virtual ISA with unlimited typed registers (<code>%r</code> 32-bit integer, <code>%rd</code> 64-bit, <code>%f</code> float). NVVM has already done real work on it:</p>
+  <ul>
+    <li><code>shl.b32 %r3, %r1, 7</code> and <code>shl.b32 %r4, %r2, 2</code> are tinygrad's shifts. <code>mul.wide.s32 %rd7, %r5, 4</code> turns the element index into a 64-bit byte offset.</li>
+    <li><code>ld.global.v4.f32 {%f1, %f2, %f3, %f4}, [%rd8]</code> is the <code>float4</code> load, still one instruction.</li>
+    <li>The four <code>add.f32</code> and one <code>st.global.v4.f32</code> are the add and the store.</li>
+  </ul>
+  <p>tinygrad passes this PTX to <code>cuModuleLoadData</code>, and the driver's ptxas JIT compiles it to SASS for the exact GPU, which here is sm_89. To show you that SASS, the capture harness compiled the same PTX with <code>ptxas -arch=sm_89 -v</code> and disassembled it with <code>cuobjdump -sass</code>. Switch to <b>SASS</b>. Without the padding NOPs, the whole kernel is 19 instructions:</p>
+  <pre class="code static" data-lang="sass">
+/*0000*/  MOV R1, c[0x0][0x28] ;                       // stack pointer (unused here)
+/*0010*/  S2R R0, SR_CTAID.X ;                         // R0 = blockIdx.x          (gidx0)
+/*0020*/  MOV R7, 0x4 ;                                // sizeof(float)
+/*0030*/  ULDC.64 UR4, c[0x0][0x118] ;                 // global memory descriptor for .E accesses
+/*0040*/  S2R R3, SR_TID.X ;                           // R3 = threadIdx.x         (lidx0)
+/*0050*/  LEA R0, R0, R3, 0x5 ;                        // R0 = (gidx0 << 5) + lidx0
+/*0060*/  SHF.L.U32 R6, R0, 0x2, RZ ;                  // R6 = R0 << 2  == alu0
+/*0070*/  IMAD.WIDE R2, R6, R7, c[0x0][0x168] ;        // &data1[alu0] = alu0*4 + param 1
+/*0080*/  IMAD.WIDE R4, R6.reuse, R7.reuse, c[0x0][0x170] ; // &data2[alu0]
+/*0090*/  LDG.E.128 R8, [R2.64] ;                      // float4 val0 -> R8..R11
+/*00a0*/  LDG.E.128 R12, [R4.64] ;                     // float4 val1 -> R12..R15
+/*00b0*/  IMAD.WIDE R6, R6, R7, c[0x0][0x160] ;        // &data0[alu0]  (param 0: the output)
+/*00c0*/  FADD R11, R11, R15 ;                         // .w
+/*00d0*/  FADD R10, R10, R14 ;                         // .z
+/*00e0*/  FADD R9, R9, R13 ;                           // .y
+/*00f0*/  FADD R8, R8, R12 ;                           // .x
+/*0100*/  STG.E.128 [R6.64], R8 ;                      // one 16-byte store
+/*0110*/  EXIT ;
+/*0120*/  BRA 0x120;                                   // never reached: padding loop
+</pre>
+  <p>(The comments are ours. The instructions are the capture's.) Some things to notice:</p>
+  <ul>
+    <li><b>ptxas refactored tinygrad's index.</b> tinygrad emitted <code>(gidx0&lt;&lt;7)+(lidx0&lt;&lt;2)</code>. ptxas factored it as <code>((gidx0&lt;&lt;5)+lidx0)&lt;&lt;2</code>, a single <code>LEA</code> (shift-and-add) followed by one shift. Same value, one instruction fewer.</li>
+    <li><b>Kernel parameters live in constant bank 0.</b> <code>c[0x0][0x160]</code>, <code>0x168</code> and <code>0x170</code> are the three 8-byte pointers, in argument order <code>data0, data1, data2</code>. ptxas reports <code>376 bytes cmem[0]</code>: 0x160 = 352 bytes of driver-reserved space, plus 3 × 8 bytes of parameters.</li>
+    <li><b><code>.E.128</code></b> is a 128-bit access through the 64-bit address register pair <code>R2.64</code> (R2:R3). One instruction moves a whole float4 per thread, and 512 bytes per warp.</li>
+    <li><b>18 registers</b> (<code>ptxas -v</code>: <code>Used 18 registers, used 0 barriers, 376 bytes cmem[0]</code>), no stack and no spills.</li>
+  </ul>
+  <div class="sass-mix" data-key="add/default"></div>
+
+  <h2>Who touches what: blocks, warps, threads</h2>
+  <p>The launch is 8192 blocks of 32 threads. Each block is one warp, the 32 threads that the SM runs in lockstep. Every thread runs the 19 instructions above with its own <code>(gidx0, lidx0)</code> and computes <code>alu0 = (gidx0&lt;&lt;7)+(lidx0&lt;&lt;2)</code>. Pick a block and a thread below, or press <em>run warp</em> to watch one warp execute its load, add and store. The memory strip shows the 128 floats (512 bytes) that this block covers, in rows of 32 floats. One row is 128 bytes, the size of an L2 cache line on NVIDIA GPUs.</p>
+  <div class="anim" id="gridanim"></div>
+  <p>This is the best access pattern a GPU memory system can get. The 32 threads of a warp ask for 32 adjacent 16-byte pieces, 512 contiguous bytes, so each <code>LDG.E.128</code> is served as four full cache lines and no byte is fetched twice. Block <code>g</code> starts exactly where block <code>g-1</code> ended (<code>g×128</code> floats), so the 8192 blocks tile the 4 MB arrays with no gaps or overlaps. Row and column never appear: the 2-D shape vanished in <em>simplify ranges</em>, and element <code>(i, j)</code> is just float number <code>1024·i + j</code>.</p>
+
+  <h2>Launch and timing</h2>
+  <p>The runtime side is short. <code>exec_kernel</code> (<a class="src" data-src="tinygrad/engine/realize.py#L180"></a>) gets the compiled program, computes the launch dimensions from the <code>ProgramInfo</code> (<a class="src" data-src="tinygrad/uop/ops.py#L1231"></a>), and calls <code>CUDAProgram.__call__</code>. That packs the three device pointers into a 24-byte struct and launches:</p>
+  <pre class="code static" data-lang="python">
+# tinygrad/runtime/ops_cuda.py:65
+cuLaunchKernel(self.prg, *global_size, *local_size, self.smem, None, None, self.vargs)
+#               E_8192_32_4  8192,1,1     32,1,1     0 bytes   default stream, args via 'extra'
+</pre>
+  <p>Note that tinygrad's <code>global_size</code> is the number of <em>blocks</em> (gridDim), not the number of threads as in OpenCL. With <code>DEBUG=2</code>, every launch is bracketed by two CUDA events and synchronized (<a class="src" data-src="tinygrad/runtime/ops_cuda.py#L26"></a>), and the elapsed time is printed. The harness took the best of five runs: <b>21.57 µs</b>.</p>
+  <p>The kernel reads two 4 MiB arrays and writes one: 12,582,912 bytes, which is the <code>mem</code> estimate the capture recorded. 12,582,912 B / 21.57 µs = <b>583 GB/s</b>. That is almost twice the L4's DRAM bandwidth (300 GB/s on NVIDIA's datasheet), which looks impossible until you remember that the L4 has a 48 MB L2 cache. The harness timed five back-to-back runs on the same inputs, so the 12 MB working set was already in L2. Treat these numbers as "hot cache" numbers: a fair comparison between implementations measured the same way, not a statement about DRAM.</p>
+  <div class="bars" data-keys="add/default,add/torch:eager,add/torch:inductor" data-labels="tinygrad E_8192_32_4|PyTorch eager|torch.compile (Triton)" data-title="a + b on the L4 (1024×1024 float32)"></div>
+  <p>The PyTorch kernels are three times faster. Before reading anything into that, note that the two sides were measured differently. PyTorch's times are kernel durations from the profiler (CUPTI). tinygrad's come from events recorded on the stream around a single launch, which also counts the gap between the first event and the kernel starting. For a kernel this short, that overhead is a large share of the total. The block size may also cost some real time. With only 32 threads per block, and CUDA's limit of 24 resident blocks per SM on compute capability 8.9, an SM can hold at most 768 of these threads, half of its 1536 thread slots (the <code>max_threads_per_multi_processor=1536</code> in Inductor's device properties below). The capture cannot separate the two effects. Chapter 6 shows how BEAM search explores other launch shapes.</p>
+
+  <h2>The same add in PyTorch</h2>
+  <p><b>Eager mode</b> launched one kernel, and the profiler gave its full name:</p>
+  <div class="torch-view" data-key="add/torch" data-tabs="eager" data-tab="eager"></div>
+  <p><code>vectorized_elementwise_kernel&lt;4, CUDAFunctor_add&lt;float&gt;, …&gt;</code> is a C++ template instantiated for <code>float</code> addition, with vector width 4, and compiled into <code>libtorch_cuda.so</code> when PyTorch was built. No code is generated at run time. The template already contains the same idea tinygrad's heuristic found: four elements per thread, loaded as a vector. Its cost appears with longer expressions. Each eager op is a separate kernel that reads and writes all of memory, so <code>fused_chain</code> launches four of these (see the table in the preface).</p>
+  <p><b><code>torch.compile</code></b> runs the other pipeline. Step through the tabs from <b>FX graph</b> to <b>SASS</b>:</p>
+  <div class="torch-view" data-key="add/torch" data-tabs="fx,pre,post,output,ttir,ttgir,llir,ptx,sass" data-tab="output" data-highlight="triton_poi_fused_add_0|XBLOCK|tl\.load|tl\.store|sizePerThread|LDG|STG|ld\.global|st\.global"></div>
+  <ul>
+    <li><b>FX graph</b>: Dynamo plus AOTAutograd reduced the lambda to one <code>torch.ops.aten.add.Tensor</code>.</li>
+    <li><b>Inductor IR</b>: a <code>SchedulerNode</code> with a loop body: <code>load</code>, <code>load</code>, <code>add</code>, <code>store</code>. Before fusion the index is <code>1024*p0 + p1</code> over two ranges. After fusion it is one range <code>c0</code> of 1,048,576. That is the same simplification tinygrad's <em>simplify ranges</em> made.</li>
+    <li><b>Output code</b>: a Python module with the kernel <code>triton_poi_fused_add_0</code> ("poi" for pointwise), written in Triton. One Triton <em>program</em> handles <code>XBLOCK</code> elements: <code>xindex = xoffset + tl.arange(0, XBLOCK)</code>. The code says nothing about threads. The <code>call()</code> function at the bottom allocates <code>buf0</code> and launches the kernel.</li>
+    <li><b>TTIR → TTGIR</b>: Triton's whole-tensor IR (<code>tensor&lt;1024xf32&gt;</code>) gains a <em>layout</em> in TTGIR: <code>#blocked&lt;{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4]}&gt;</code>. That line plays the role of tinygrad's <code>UPCAST 4</code> and <code>LOCAL 32</code>: 4 contiguous elements per thread, 32 threads per warp, 4 warps per program.</li>
+    <li><b>LLVM IR → PTX → SASS</b>: LLVM's NVPTX backend emits the PTX, and Triton runs ptxas itself to produce a cubin.</li>
+  </ul>
+  <p>Inductor autotuned two configurations of this kernel, and the capture kept both (use the selector in the TTIR to SASS tabs). With 4 warps and <code>XBLOCK=1024</code>, each of 128 threads handles 8 floats as two <code>float4</code>s, 512 floats apart, and uses 26 registers. With 8 warps and <code>XBLOCK=512</code>, each of 256 threads handles 2 floats with <code>LDG.E.64</code> and uses 12 registers. The capture does not record which configuration the autotuner picked for the timed run.</p>
+  <p>Here are the two SASS listings side by side, tinygrad's 19 instructions and Triton's 4-warp variant:</p>
+  <div class="anim" id="sasscmp"></div>
+  <p>The two compilers arrive at nearly the same machine code: the same <code>S2R</code> pair, the same <code>IMAD.WIDE … c[0x0][…]</code> address computations, 128-bit <code>LDG.E.128</code> loads, <code>FADD</code>s and 128-bit stores. The differences are in the tiling. Triton's thread does two float4s per input (an extra <code>+0x800</code> = 2048-byte offset on the second load, which is 512 floats), and its index needs a <code>LOP3.LUT … 0x1fc</code> to mask <code>tid*4</code> to 0..508, because 128 threads × 4 = 512 covers only half of XBLOCK = 1024. tinygrad's block is a quarter the size, so its index math is two instructions, <code>LEA</code> and <code>SHF</code>, against Triton's three (<code>SHF</code>, <code>LOP3</code>, <code>LEA</code>). The real difference between the frameworks is not in this kernel. It is in what happens with longer expressions (chapter 3), reductions (chapter 5) and matmuls (chapters 6 and 7).</p>
+
+  <h2>What to take from this chapter</h2>
+  <ul>
+    <li>A tinygrad <code>Tensor</code> is a lazy UOp graph. <code>realize()</code> starts a compiler.</li>
+    <li>The scheduler turns shapes into loops (<code>RANGE</code>) and movement ops into index arithmetic, then cuts the graph into kernels.</li>
+    <li>Codegen is a fixed sequence of named rewrite passes. Only the optimizer (<code>apply_opts</code>) makes choices: here UPCAST 4 and LOCAL 32, which give the name <code>E_8192_32_4</code>.</li>
+    <li>The UPCAST becomes a vector, the vector becomes a <code>float4</code>, and the <code>float4</code> becomes <code>ld.global.v4.f32</code> and then <code>LDG.E.128</code>. The LOCAL becomes <code>threadIdx.x</code>.</li>
+    <li>On the L4 the kernel runs in 21.57 µs, measured with events and on a hot L2. PyTorch's prebuilt kernel and its Triton kernel use the same float4 idea and nearly the same SASS.</li>
+  </ul>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch01.js"></script></body></html>

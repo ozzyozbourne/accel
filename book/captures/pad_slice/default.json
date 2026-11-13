@@ -1,0 +1,757 @@
+{
+ "example": "pad_slice",
+ "variant": "default",
+ "device": "CUDA",
+ "arch": "sm_89",
+ "chapter": 3,
+ "env": {
+  "DEV": "CUDA"
+ },
+ "tinygrad_code": "\"pad_slice\": dict(chapter=3, inputs={\"a\": _f32(1000, 1000)},\n                    tg=lambda T: T[\"a\"][::2, 1::3].pad(((1, 1), (2, 2))).contiguous(),\n                    ref=lambda N: np.pad(N[\"a\"][::2, 1::3], ((1, 1), (2, 2))),\n                    torch=lambda X: __import__(\"torch\").nn.functional.pad(X[\"a\"][::2, 1::3], (2, 2, 1, 1)).contiguous()),",
+ "tensor_graph": {
+  "text": "c1 = UOp.new_buffer('CUDA', 1000000, dtypes.float, 1)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(1000, dtypes.weakint)))\nc7 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(999, dtypes.weakint)))\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc17 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint)))\nc18 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc20 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(333, dtypes.weakint)))\nc22 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint)))\nc25 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(502, dtypes.weakint), UOp.const(337, dtypes.weakint)))\nc27 = UOp(Ops.PAD, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c1, c3)), c7, c9)), c15)), c17, c18)), c20)), c22, c25)).contiguous()\nast = c27.sink()",
+  "lines": 12,
+  "clipped": false
+ },
+ "passes": [
+  {
+   "stage": "tensor",
+   "name": "number the uops",
+   "kernel": null,
+   "nodes": 29,
+   "changed": true,
+   "ms": 0.547,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1000000, dtypes.float, 1)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(1000, dtypes.weakint)))\nc7 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(999, dtypes.weakint)))\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc17 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint)))\nc18 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc20 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(333, dtypes.weakint)))\nc22 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint)))\nc25 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(502, dtypes.weakint), UOp.const(337, dtypes.weakint)))\nc27 = UOp(Ops.PAD, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c1, c3)), c7, c9)), c15)), c17, c18)), c20)), c22, c25)).contiguous().rtag((0,))\nast = c27.sink()",
+    "lines": 12,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 6,
+   "changed": true,
+   "ms": 8.356,
+   "ir": {
+    "text": "c1 = UOp.range(169174, 0, AxisType.PLACEHOLDER)\nc3 = c1//UOp.const(337, dtypes.weakint)\nc4 = c1%UOp.const(337, dtypes.weakint)\nast = c3.sink(c4)",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "pad",
+   "kernel": null,
+   "nodes": 9,
+   "changed": true,
+   "ms": 7.255,
+   "ir": {
+    "text": "c1 = UOp.range(169174, 0, AxisType.WEAK)\nast = ((c1<UOp.const(337, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(168837, dtypes.weakint))",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "pad",
+   "kernel": null,
+   "nodes": 11,
+   "changed": false,
+   "ms": 0.492
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 27,
+   "changed": true,
+   "ms": 50.059,
+   "ir": {
+    "text": "c1 = UOp.range(169174, 0, AxisType.PLACEHOLDER)\nc3 = c1%UOp.const(337, dtypes.weakint)\nc16 = ((c3<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(335, dtypes.weakint))&(((c1<UOp.const(337, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(168837, dtypes.weakint)))\nc21 = c16.alu(Ops.WHERE, (c1//UOp.const(337, dtypes.weakint)+UOp.const(-1, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc22 = UOp.const(0, dtypes.weakint)\nc25 = c16.alu(Ops.WHERE, (c3+UOp.const(-2, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nast = c21.sink(c22, c25, c22)",
+    "lines": 7,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 29,
+   "changed": true,
+   "ms": 9.726,
+   "ir": {
+    "text": "c1 = UOp.range(169174, 0, AxisType.PLACEHOLDER)\nc3 = c1%UOp.const(337, dtypes.weakint)\nc16 = ((c3<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(335, dtypes.weakint))&(((c1<UOp.const(337, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(168837, dtypes.weakint)))\nc22 = c16.alu(Ops.WHERE, (c1//UOp.const(337, dtypes.weakint)*UOp.const(2, dtypes.weakint)+UOp.const(-2, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc27 = c16.alu(Ops.WHERE, (c3*UOp.const(3, dtypes.weakint)+UOp.const(-6, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nast = c22.sink(c27)",
+    "lines": 6,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 28,
+   "changed": true,
+   "ms": 8.402,
+   "ir": {
+    "text": "c1 = UOp.range(169174, 0, AxisType.PLACEHOLDER)\nc3 = c1%UOp.const(337, dtypes.weakint)\nc26 = (((c3<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(335, dtypes.weakint))&(((c1<UOp.const(337, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(168837, dtypes.weakint)))).alu(Ops.WHERE, (c1//UOp.const(337, dtypes.weakint)*UOp.const(2000, dtypes.weakint)+c3*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nast = c26.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "early transform tensor graph",
+   "kernel": null,
+   "nodes": 33,
+   "changed": true,
+   "ms": 99.438,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 169174, dtypes.float, 2)\nc4 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(502, dtypes.weakint), UOp.const(337, dtypes.weakint)))\nc5 = UOp(Ops.RESHAPE, dtypes.float, (c1, c4))\nc7 = UOp.new_buffer('CUDA', 1000000, dtypes.float, 1)\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(1000, dtypes.weakint)))\nc13 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(999, dtypes.weakint)))\nc21 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc23 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint)))\nc24 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc26 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(333, dtypes.weakint)))\nc28 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint)))\nc29 = UOp(Ops.PAD, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c7, c9)), c13, c15)), c21)), c23, c24)), c26)), c28, c4))\nc31 = c5.after(c5.store(c29)).rtag((0,))\nast = c31.sink()",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "finalize call",
+   "kernel": null,
+   "nodes": 33,
+   "changed": true,
+   "ms": 0.226,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 169174, dtypes.float, 2)\nc4 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(502, dtypes.weakint), UOp.const(337, dtypes.weakint)))\nc5 = UOp(Ops.RESHAPE, dtypes.float, (c1, c4))\nc7 = UOp.new_buffer('CUDA', 1000000, dtypes.float, 1)\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(1000, dtypes.weakint)))\nc13 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(999, dtypes.weakint)))\nc21 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc23 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint)))\nc24 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc26 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(333, dtypes.weakint)))\nc28 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint)))\nc29 = UOp(Ops.PAD, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c7, c9)), c13, c15)), c21)), c23, c24)), c26)), c28, c4))\nc31 = c5.after(c5.store(c29))\nast = c31.sink()",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "replace bufs",
+   "kernel": null,
+   "nodes": 33,
+   "changed": true,
+   "ms": 0.227,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc4 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(502, dtypes.weakint), UOp.const(337, dtypes.weakint)))\nc5 = UOp(Ops.RESHAPE, dtypes.float, (c1, c4))\nc7 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(1000, dtypes.weakint)))\nc13 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(999, dtypes.weakint)))\nc21 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc23 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint)))\nc24 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc26 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(333, dtypes.weakint)))\nc28 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint)))\nc29 = UOp(Ops.PAD, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c7, c9)), c13, c15)), c21)), c23, c24)), c26)), c28, c4))\nc31 = c5.after(c5.store(c29))\nast = c31.sink()",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "multi_pm",
+   "kernel": null,
+   "nodes": 33,
+   "changed": false,
+   "ms": 0.086
+  },
+  {
+   "stage": "schedule",
+   "name": "earliest rewrites",
+   "kernel": null,
+   "nodes": 33,
+   "changed": true,
+   "ms": 0.362,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc4 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(502, dtypes.weakint), UOp.const(337, dtypes.weakint)))\nc7 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(1000, dtypes.weakint)))\nc13 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1000, dtypes.weakint), UOp.const(999, dtypes.weakint)))\nc21 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc23 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint), UOp.const(0, dtypes.weakint)))\nc24 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(333, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc26 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(500, dtypes.weakint), UOp.const(333, dtypes.weakint)))\nc28 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint)))\nc29 = UOp(Ops.PAD, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.SHRINK, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c7, c9)), c13, c15)), c21)), c23, c24)), c26)), c28, c4))\nc31 = c1.after(UOp(Ops.RESHAPE, dtypes.float, (c1, c4)).store(c29))\nast = c31.sink()",
+    "lines": 14,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "convert copy to store",
+   "kernel": null,
+   "nodes": 33,
+   "changed": false,
+   "ms": 0.084
+  },
+  {
+   "stage": "schedule",
+   "name": "get realize",
+   "kernel": null,
+   "nodes": 33,
+   "changed": false,
+   "ms": 0.093
+  },
+  {
+   "stage": "schedule",
+   "name": "pad",
+   "kernel": null,
+   "nodes": 9,
+   "changed": false,
+   "ms": 0.471
+  },
+  {
+   "stage": "schedule",
+   "name": "pad",
+   "kernel": null,
+   "nodes": 9,
+   "changed": false,
+   "ms": 0.406
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 26,
+   "changed": true,
+   "ms": 9.124,
+   "ir": {
+    "text": "c1 = UOp.range(502, 0, AxisType.PLACEHOLDER)\nc12 = (((c1<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(501, dtypes.weakint))).alu(Ops.WHERE, (c1+UOp.const(-1, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc13 = UOp.const(0, dtypes.weakint)\nc15 = UOp.range(337, 1, AxisType.PLACEHOLDER)\nc24 = (((c15<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c15<UOp.const(335, dtypes.weakint))).alu(Ops.WHERE, (c15+UOp.const(-2, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nast = c12.sink(c13, c24, c13)",
+    "lines": 6,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 28,
+   "changed": true,
+   "ms": 9.114,
+   "ir": {
+    "text": "c1 = UOp.range(502, 0, AxisType.PLACEHOLDER)\nc14 = (((c1<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(501, dtypes.weakint))).alu(Ops.WHERE, (c1*UOp.const(2, dtypes.weakint)+UOp.const(-2, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc16 = UOp.range(337, 1, AxisType.PLACEHOLDER)\nc26 = (((c16<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c16<UOp.const(335, dtypes.weakint))).alu(Ops.WHERE, (c16*UOp.const(3, dtypes.weakint)+UOp.const(-6, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nast = c14.sink(c26)",
+    "lines": 5,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 28,
+   "changed": true,
+   "ms": 5.399,
+   "ir": {
+    "text": "c1 = UOp.range(337, 1, AxisType.PLACEHOLDER)\nc10 = UOp.range(502, 0, AxisType.PLACEHOLDER)\nc26 = (((c1<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c1<UOp.const(335, dtypes.weakint))&(((c10<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c10<UOp.const(501, dtypes.weakint)))).alu(Ops.WHERE, (c10*UOp.const(2000, dtypes.weakint)+c1*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nast = c26.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 7,
+   "changed": true,
+   "ms": 0.292,
+   "ir": {
+    "text": "c1 = UOp.range(502, 0, AxisType.PLACEHOLDER)\nc4 = UOp.range(337, 1, AxisType.PLACEHOLDER)\nc5 = c1*UOp.const(337, dtypes.weakint)+c4\nast = c5.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "apply rangeify",
+   "kernel": null,
+   "nodes": 43,
+   "changed": true,
+   "ms": 1.347,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(502, 0, AxisType.WEAK)\nc6 = UOp.range(337, 1, AxisType.WEAK)\nc15 = ((c3<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(501, dtypes.weakint))\nc22 = ((c6<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c6<UOp.const(335, dtypes.weakint))\nc25 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc35 = (c22&c15).alu(Ops.WHERE, (c3*UOp.const(2000, dtypes.weakint)+c6*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc38 = (UOp.const(True, dtypes.bool)&c15&c22).alu(Ops.WHERE, c25.index(c35), UOp.const(0.0, dtypes.weakfloat))\nc40 = c1.index((c3*UOp.const(337, dtypes.weakint)+c6)).store(c38).end(c3, c6)\nc41 = c1.after(c40)\nast = c41.sink()",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "add device to deviceless",
+   "kernel": null,
+   "nodes": 43,
+   "changed": false,
+   "ms": 0.109
+  },
+  {
+   "stage": "schedule",
+   "name": "symbolic+reduce_collapse+debuf",
+   "kernel": null,
+   "nodes": 42,
+   "changed": true,
+   "ms": 0.467,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(502, 0, AxisType.WEAK)\nc6 = UOp.range(337, 1, AxisType.WEAK)\nc15 = ((c3<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(501, dtypes.weakint))\nc21 = ((c6<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c6<UOp.const(335, dtypes.weakint))\nc24 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc34 = (c21&c15).alu(Ops.WHERE, (c3*UOp.const(2000, dtypes.weakint)+c6*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc37 = (c15&c21).alu(Ops.WHERE, c24.index(c34), UOp.const(0.0, dtypes.weakfloat))\nc39 = c1.index((c3*UOp.const(337, dtypes.weakint)+c6)).store(c37).end(c3, c6)\nc40 = c1.after(c39)\nast = c40.sink()",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "limit buffers",
+   "kernel": null,
+   "nodes": 42,
+   "changed": false,
+   "ms": 0.955
+  },
+  {
+   "stage": "schedule",
+   "name": "stage to store",
+   "kernel": null,
+   "nodes": 42,
+   "changed": true,
+   "ms": 0.321,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA')).rtag(())\nc3 = UOp.range(502, 0, AxisType.WEAK).rtag(())\nc6 = UOp.range(337, 1, AxisType.WEAK).rtag(())\nc15 = ((c3<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(501, dtypes.weakint))\nc21 = ((c6<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c6<UOp.const(335, dtypes.weakint))\nc24 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA')).rtag(())\nc34 = (c21&c15).alu(Ops.WHERE, (c3*UOp.const(2000, dtypes.weakint)+c6*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc37 = (c15&c21).alu(Ops.WHERE, c24.index(c34), UOp.const(0.0, dtypes.weakfloat))\nc39 = c1.index((c3*UOp.const(337, dtypes.weakint)+c6)).store(c37).end(c3, c6)\nc40 = c1.after(c39)\nast = c40.sink()",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "kernel split",
+   "kernel": null,
+   "nodes": 40,
+   "changed": true,
+   "ms": 0.581,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(502, 0, AxisType.WEAK)\nc6 = UOp.range(337, 1, AxisType.WEAK)\nc15 = ((c3<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(501, dtypes.weakint))\nc21 = ((c6<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c6<UOp.const(335, dtypes.weakint))\nc24 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc34 = (c21&c15).alu(Ops.WHERE, (c3*UOp.const(2000, dtypes.weakint)+c6*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc37 = (c15&c21).alu(Ops.WHERE, c24.index(c34), UOp.const(0.0, dtypes.weakfloat))\nast = c1.index((c3*UOp.const(337, dtypes.weakint)+c6)).store(c37).end(c3, c6)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "split kernels",
+   "kernel": null,
+   "nodes": 46,
+   "changed": true,
+   "ms": 1.214,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "remove indexing from call args",
+   "kernel": null,
+   "nodes": 46,
+   "changed": false,
+   "ms": 0.031
+  },
+  {
+   "stage": "schedule",
+   "name": "schedule to linear",
+   "kernel": null,
+   "nodes": 48,
+   "changed": true,
+   "ms": 38.313,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "params to buffers",
+   "kernel": null,
+   "nodes": 45,
+   "changed": true,
+   "ms": 0.035,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "resolve linear call",
+   "kernel": null,
+   "nodes": 45,
+   "changed": true,
+   "ms": 0.232,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "create COPY kernels for SDMA",
+   "kernel": null,
+   "nodes": 45,
+   "changed": false,
+   "ms": 0.561
+  },
+  {
+   "stage": "codegen",
+   "name": "multi_pm",
+   "kernel": 0,
+   "nodes": 41,
+   "changed": false,
+   "ms": 0.128,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(502, 0, AxisType.WEAK)\nc6 = UOp.range(337, 1, AxisType.WEAK)\nc15 = ((c3<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(501, dtypes.weakint))\nc21 = ((c6<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c6<UOp.const(335, dtypes.weakint))\nc24 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc34 = (c21&c15).alu(Ops.WHERE, (c3*UOp.const(2000, dtypes.weakint)+c6*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc37 = (c15&c21).alu(Ops.WHERE, c24.index(c34), UOp.const(0.0, dtypes.weakfloat))\nc39 = c1.index((c3*UOp.const(337, dtypes.weakint)+c6)).store(c37).end(c3, c6)\nast = c39.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 10,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "early movement ops",
+   "kernel": 0,
+   "nodes": 41,
+   "changed": false,
+   "ms": 0.14
+  },
+  {
+   "stage": "codegen",
+   "name": "load collapse",
+   "kernel": 0,
+   "nodes": 41,
+   "changed": false,
+   "ms": 0.098
+  },
+  {
+   "stage": "codegen",
+   "name": "split ranges",
+   "kernel": 0,
+   "nodes": 41,
+   "changed": false,
+   "ms": 0.487
+  },
+  {
+   "stage": "codegen",
+   "name": "initial symbolic",
+   "kernel": 0,
+   "nodes": 41,
+   "changed": false,
+   "ms": 4.71
+  },
+  {
+   "stage": "codegen",
+   "name": "simplify ranges",
+   "kernel": 0,
+   "nodes": 41,
+   "changed": false,
+   "ms": 1.439
+  },
+  {
+   "stage": "codegen",
+   "name": "flatten range",
+   "kernel": 0,
+   "nodes": 44,
+   "changed": true,
+   "ms": 0.179,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(251, 0, AxisType.GLOBAL)\nc6 = UOp.range(2, 2, AxisType.LOCAL)\nc7 = c3*UOp.const(2, dtypes.weakint)+c6\nc10 = UOp.range(337, 1, AxisType.GLOBAL)\nc19 = ((c7<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c7<UOp.const(501, dtypes.weakint))\nc24 = ((c10<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c10<UOp.const(335, dtypes.weakint))\nc27 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc37 = (c24&c19).alu(Ops.WHERE, (c7*UOp.const(2000, dtypes.weakint)+c10*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc40 = (c19&c24).alu(Ops.WHERE, c27.index(c37), UOp.const(0.0, dtypes.weakfloat))\nc42 = c1.index((c7*UOp.const(337, dtypes.weakint)+c10)).store(c40).end(c3, c6, c10)\nast = c42.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 12,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "postopt symbolic",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": true,
+   "ms": 19.452,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(251, 0, AxisType.GLOBAL)\nc7 = UOp.range(2, 2, AxisType.LOCAL)\nc11 = UOp.range(337, 1, AxisType.GLOBAL)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = (((c11<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c11<UOp.const(335, dtypes.weakint))&((((c3+c7)<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&((c3*UOp.const(2, dtypes.weakint)+c7)<UOp.const(501, dtypes.weakint)))).alu(Ops.WHERE, (c3*UOp.const(4000, dtypes.weakint)+c7*UOp.const(2000, dtypes.weakint)+c11*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc44 = c15.index(c43)\nc46 = c1.index((c3*UOp.const(674, dtypes.weakint)+c7*UOp.const(337, dtypes.weakint)+c11)).store(c44).end(c3, c7, c11)\nast = c46.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "expander",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": false,
+   "ms": 0.639
+  },
+  {
+   "stage": "codegen",
+   "name": "remove reduces",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": false,
+   "ms": 1.239
+  },
+  {
+   "stage": "codegen",
+   "name": "add local buffers",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": false,
+   "ms": 0.136
+  },
+  {
+   "stage": "codegen",
+   "name": "add gpudims",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": true,
+   "ms": 3.116,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(251, 'gidx1', dtype=dtypes.weakint)\nc7 = UOp.special(2, 'lidx0', dtype=dtypes.weakint)\nc11 = UOp.special(337, 'gidx0', dtype=dtypes.weakint)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = (((c11<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c11<UOp.const(335, dtypes.weakint))&((((c3+c7)<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&((c3*UOp.const(2, dtypes.weakint)+c7)<UOp.const(501, dtypes.weakint)))).alu(Ops.WHERE, (c3*UOp.const(4000, dtypes.weakint)+c7*UOp.const(2000, dtypes.weakint)+c11*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc44 = c15.index(c43)\nc46 = c1.index((c3*UOp.const(674, dtypes.weakint)+c7*UOp.const(337, dtypes.weakint)+c11)).store(c44).end(c3, c7, c11)\nast = c46.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "*** expand broadcast / add loads",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": true,
+   "ms": 3.592,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(251, 'gidx1', dtype=dtypes.weakint)\nc7 = UOp.special(2, 'lidx0', dtype=dtypes.weakint)\nc11 = UOp.special(337, 'gidx0', dtype=dtypes.weakint)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = (((c11<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c11<UOp.const(335, dtypes.weakint))&((((c3+c7)<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&((c3*UOp.const(2, dtypes.weakint)+c7)<UOp.const(501, dtypes.weakint)))).alu(Ops.WHERE, (c3*UOp.const(4000, dtypes.weakint)+c7*UOp.const(2000, dtypes.weakint)+c11*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc45 = c15.index(c43).load()\nc47 = c1.index((c3*UOp.const(674, dtypes.weakint)+c7*UOp.const(337, dtypes.weakint)+c11)).store(c45).end(c3, c7, c11)\nast = c47.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "devectorize2",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": false,
+   "ms": 6.031
+  },
+  {
+   "stage": "codegen",
+   "name": "early symbolic",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": true,
+   "ms": 4.63,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(337, 'gidx0', dtype=dtypes.weakint)\nc5 = UOp.special(251, 'gidx1', dtype=dtypes.weakint)\nc9 = UOp.special(2, 'lidx0', dtype=dtypes.weakint)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = (((c3<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(335, dtypes.weakint))&((((c5+c9)<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&((c9+c5*UOp.const(2, dtypes.weakint))<UOp.const(501, dtypes.weakint)))).alu(Ops.WHERE, (c5*UOp.const(4000, dtypes.weakint)+c9*UOp.const(2000, dtypes.weakint)+c3*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc45 = c15.index(c43).load()\nc47 = c1.index((c3+(c5*UOp.const(674, dtypes.weakint)+c9*UOp.const(337, dtypes.weakint)))).store(c45).end(c5, c9, c3)\nast = c47.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add images",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": true,
+   "ms": 2.722,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(337, 'gidx0', dtype=dtypes.weakint)\nc5 = UOp.special(251, 'gidx1', dtype=dtypes.weakint)\nc9 = UOp.special(2, 'lidx0', dtype=dtypes.weakint)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = (((c3<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(335, dtypes.weakint))&((((c5+c9)<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&((c9+c5*UOp.const(2, dtypes.weakint))<UOp.const(501, dtypes.weakint)))).alu(Ops.WHERE, (c5*UOp.const(4000, dtypes.weakint)+c9*UOp.const(2000, dtypes.weakint)+c3*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc45 = c15.index(c43).load()\nc47 = c1.index((c3+(c5*UOp.const(674, dtypes.weakint)+c9*UOp.const(337, dtypes.weakint)))).store(c45).end(c5, c9, c3)\nast = c47.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "extra symbolic",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": false,
+   "ms": 5.548
+  },
+  {
+   "stage": "codegen",
+   "name": "lower all index dtypes",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": true,
+   "ms": 8.378,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(337, 'gidx0', dtype=dtypes.int)\nc5 = UOp.special(251, 'gidx1', dtype=dtypes.int)\nc9 = UOp.special(2, 'lidx0', dtype=dtypes.int)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = (((c3<UOp.const(2, dtypes.int))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(335, dtypes.int))&((((c5+c9)<UOp.const(1, dtypes.int))!=UOp.const(True, dtypes.bool))&((c9+c5*UOp.const(2, dtypes.int))<UOp.const(501, dtypes.int)))).alu(Ops.WHERE, (c5*UOp.const(4000, dtypes.int)+c9*UOp.const(2000, dtypes.int)+c3*UOp.const(3, dtypes.int)+UOp.const(-2005, dtypes.int)), UOp.const(Invalid, dtypes.bool))\nc45 = c15.index(c43).load()\nc47 = c1.index((c3+(c5*UOp.const(674, dtypes.int)+c9*UOp.const(337, dtypes.int)))).store(c45).end(c5, c9, c3)\nast = c47.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "final symbolic",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": false,
+   "ms": 0.337
+  },
+  {
+   "stage": "codegen",
+   "name": "cast float alu operands",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": false,
+   "ms": 0.14
+  },
+  {
+   "stage": "codegen",
+   "name": "early decompositions",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": false,
+   "ms": 0.2
+  },
+  {
+   "stage": "codegen",
+   "name": "decomp dtypes",
+   "kernel": 0,
+   "nodes": 49,
+   "changed": false,
+   "ms": 1.095
+  },
+  {
+   "stage": "codegen",
+   "name": "late decompositions",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": true,
+   "ms": 5.999,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(337, 'gidx0', dtype=dtypes.int)\nc5 = UOp.special(251, 'gidx1', dtype=dtypes.int)\nc9 = UOp.special(2, 'lidx0', dtype=dtypes.int)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc42 = ((UOp.const(1, dtypes.int)<c3)&(c3<UOp.const(335, dtypes.int))&((UOp.const(0, dtypes.int)<(c5+c9))&((c9+(c5<<UOp.const(1, dtypes.weakint)))<UOp.const(501, dtypes.int)))).alu(Ops.WHERE, (c5*UOp.const(4000, dtypes.int)+c9*UOp.const(2000, dtypes.int)+c3*UOp.const(3, dtypes.int)+UOp.const(-2005, dtypes.int)), UOp.const(Invalid, dtypes.bool))\nc44 = c15.index(c42).load()\nc46 = c1.index((c3+(c5*UOp.const(674, dtypes.int)+c9*UOp.const(337, dtypes.int)))).store(c44).end(c5, c9, c3)\nast = c46.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "move gates from index",
+   "kernel": 0,
+   "nodes": 47,
+   "changed": true,
+   "ms": 9.512,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(337, 'gidx0', dtype=dtypes.int)\nc5 = UOp.special(251, 'gidx1', dtype=dtypes.int)\nc9 = UOp.special(2, 'lidx0', dtype=dtypes.int)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc43 = c15.index((c5*UOp.const(4000, dtypes.int)+c9*UOp.const(2000, dtypes.int)+c3*UOp.const(3, dtypes.int)+UOp.const(-2005, dtypes.int))).load(UOp.const(0.0, dtypes.float), ((UOp.const(1, dtypes.int)<c3)&(c3<UOp.const(335, dtypes.int))&((UOp.const(0, dtypes.int)<(c5+c9))&((c9+(c5<<UOp.const(1, dtypes.weakint)))<UOp.const(501, dtypes.int)))))\nc45 = c1.index((c3+(c5*UOp.const(674, dtypes.int)+c9*UOp.const(337, dtypes.int)))).store(c43).end(c5, c9, c3)\nast = c45.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 8,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "final rewrite",
+   "kernel": 0,
+   "nodes": 45,
+   "changed": true,
+   "ms": 1.927,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(337, 'gidx0', dtype=dtypes.int)\nc5 = UOp.special(251, 'gidx1', dtype=dtypes.int)\nc9 = UOp.special(2, 'lidx0', dtype=dtypes.int)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc42 = c15.index((c5*UOp.const(4000, dtypes.int)+c9*UOp.const(2000, dtypes.int)+c3*UOp.const(3, dtypes.int)+UOp.const(-2005, dtypes.int))).load(UOp.const(0.0, dtypes.float), ((UOp.const(1, dtypes.int)<c3)&(c3<UOp.const(335, dtypes.int))&((UOp.const(0, dtypes.int)<(c5+c9))&((c9+(c5<<UOp.const(1, dtypes.int)))<UOp.const(501, dtypes.int)))))\nc43 = c1.index((c3+(c5*UOp.const(674, dtypes.int)+c9*UOp.const(337, dtypes.int)))).store(c42)\nast = c43.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 8,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "casted consts",
+   "kernel": 0,
+   "nodes": 60,
+   "changed": true,
+   "ms": 0.804,
+   "ir": {
+    "text": "c2 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint).cast(dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc4 = UOp.const(337, dtypes.weakint).cast(dtypes.int)\nc5 = UOp(Ops.SPECIAL, dtypes.int, (c4,), 'gidx0')\nc8 = UOp(Ops.SPECIAL, dtypes.int, (UOp.const(251, dtypes.weakint).cast(dtypes.int),), 'gidx1')\nc14 = UOp(Ops.SPECIAL, dtypes.int, (UOp.const(2, dtypes.weakint).cast(dtypes.int),), 'lidx0')\nc21 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint).cast(dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc40 = UOp.const(1, dtypes.weakint).cast(dtypes.int)\nc57 = c21.index((c8*UOp.const(4000, dtypes.weakint).cast(dtypes.int)+c14*UOp.const(2000, dtypes.weakint).cast(dtypes.int)+c5*UOp.const(3, dtypes.weakint).cast(dtypes.int)+UOp.const(-2005, dtypes.weakint).cast(dtypes.int))).load(UOp.const(0.0, dtypes.weakfloat).cast(dtypes.float), ((c40<c5)&(c5<UOp.const(335, dtypes.weakint).cast(dtypes.int))&((UOp.const(0, dtypes.weakint).cast(dtypes.int)<(c8+c14))&((c14+(c8<<c40))<UOp.const(501, dtypes.weakint).cast(dtypes.int)))))\nc58 = c2.index((c5+(c8*UOp.const(674, dtypes.weakint).cast(dtypes.int)+c14*c4))).store(c57)\nast = c58.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.LOCAL, axis=0, arg=2),), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 10,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add implicit barriers",
+   "kernel": 0,
+   "nodes": 60,
+   "changed": false,
+   "ms": 0.113
+  },
+  {
+   "stage": "codegen",
+   "name": "add control flow",
+   "kernel": 0,
+   "nodes": 60,
+   "changed": false,
+   "ms": 0.133
+  },
+  {
+   "stage": "codegen",
+   "name": "number params with -1",
+   "kernel": 0,
+   "nodes": 60,
+   "changed": false,
+   "ms": 0.593
+  },
+  {
+   "stage": "codegen",
+   "name": "linearize/render",
+   "kernel": 0,
+   "nodes": 65,
+   "changed": true,
+   "ms": 53.232
+  },
+  {
+   "stage": "program",
+   "name": "optimize local size",
+   "kernel": 0,
+   "nodes": 69,
+   "changed": false,
+   "ms": 1.506
+  }
+ ],
+ "kernels": [
+  {
+   "ast": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(169174, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(502, 0, AxisType.WEAK)\nc6 = UOp.range(337, 1, AxisType.WEAK)\nc15 = ((c3<UOp.const(1, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c3<UOp.const(501, dtypes.weakint))\nc21 = ((c6<UOp.const(2, dtypes.weakint))!=UOp.const(True, dtypes.bool))&(c6<UOp.const(335, dtypes.weakint))\nc24 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1000000, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc34 = (c21&c15).alu(Ops.WHERE, (c3*UOp.const(2000, dtypes.weakint)+c6*UOp.const(3, dtypes.weakint)+UOp.const(-2005, dtypes.weakint)), UOp.const(Invalid, dtypes.bool))\nc37 = (c15&c21).alu(Ops.WHERE, c24.index(c34), UOp.const(0.0, dtypes.weakfloat))\nc39 = c1.index((c3*UOp.const(337, dtypes.weakint)+c6)).store(c37).end(c3, c6)\nast = c39.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 10,
+    "clipped": false
+   },
+   "name": "E_251_337_2",
+   "function_name": "E_251_337_2",
+   "global_size": [
+    "337",
+    "251",
+    "1"
+   ],
+   "local_size": [
+    "2",
+    "1",
+    "1"
+   ],
+   "applied_opts": [
+    "Opt(op=OptOps.LOCAL, axis=0, arg=2)"
+   ],
+   "estimates": {
+    "ops": "1691740",
+    "lds": "1353392",
+    "mem": "1353392"
+   },
+   "uops": {
+    "text": "   0 Ops.CONST            dtypes.weakint                   []                           169174\n   1 Ops.CAST             dtypes.int                       ['169174']                   dtypes.int\n   2 Ops.PARAM            dtypes.float                     [1]                          ParamArg(0, dtypes.float, device='CUDA')\n   3 Ops.CONST            dtypes.weakint                   []                           1000000\n   4 Ops.CAST             dtypes.int                       ['1000000']                  dtypes.int\n   5 Ops.PARAM            dtypes.float                     [4]                          ParamArg(1, dtypes.float, device='CUDA')\n   6 Ops.CONST            dtypes.weakint                   []                           337\n   7 Ops.CAST             dtypes.int                       ['337']                      dtypes.int\n   8 Ops.SPECIAL          dtypes.int                       [7]                          gidx0\n   9 Ops.CONST            dtypes.weakint                   []                           251\n  10 Ops.CAST             dtypes.int                       ['251']                      dtypes.int\n  11 Ops.SPECIAL          dtypes.int                       [10]                         gidx1\n  12 Ops.CONST            dtypes.weakint                   []                           2\n  13 Ops.CAST             dtypes.int                       ['2']                        dtypes.int\n  14 Ops.SPECIAL          dtypes.int                       [13]                         lidx0\n  15 Ops.CONST            dtypes.weakint                   []                           -2005\n  16 Ops.CAST             dtypes.int                       ['-2005']                    dtypes.int\n  17 Ops.CONST            dtypes.weakint                   []                           3\n  18 Ops.CAST             dtypes.int                       ['3']                        dtypes.int\n  19 Ops.CONST            dtypes.weakint                   []                           2000\n  20 Ops.CAST             dtypes.int                       ['2000']                     dtypes.int\n  21 Ops.CONST            dtypes.weakint                   []                           4000\n  22 Ops.CAST             dtypes.int                       ['4000']                     dtypes.int\n  23 Ops.MUL              dtypes.int                       [11, 22]                     None\n  24 Ops.MUL              dtypes.int                       [14, 20]                     None\n  25 Ops.ADD              dtypes.int                       [23, 24]                     None\n  26 Ops.MUL              dtypes.int                       [8, 18]                      None\n  27 Ops.ADD              dtypes.int                       [25, 26]                     None\n  28 Ops.ADD              dtypes.int                       [27, 16]                     None\n  29 Ops.INDEX            dtypes.float                     [5, 28]                      None\n  30 Ops.CONST            dtypes.weakint                   []                           0\n  31 Ops.CAST             dtypes.int                       ['0']                        dtypes.int\n  32 Ops.CONST            dtypes.weakint                   []                           1\n  33 Ops.CAST             dtypes.int                       ['1']                        dtypes.int\n  34 Ops.CONST            dtypes.weakint                   []                           335\n  35 Ops.CAST             dtypes.int                       ['335']                      dtypes.int\n  36 Ops.CONST            dtypes.weakint                   []                           501\n  37 Ops.CAST             dtypes.int                       ['501']                      dtypes.int\n  38 Ops.CONST            dtypes.weakfloat                 []                           0.0\n  39 Ops.CAST             dtypes.float                     ['0.0']                      dtypes.float\n  40 Ops.ADD              dtypes.int                       [11, 14]                     None\n  41 Ops.SHL              dtypes.int                       [11, 33]                     None\n  42 Ops.ADD              dtypes.int                       [14, 41]                     None\n  43 Ops.CMPLT            dtypes.bool                      [8, 35]                      None\n  44 Ops.CMPLT            dtypes.bool                      [31, 40]                     None\n  45 Ops.CMPLT            dtypes.bool                      [33, 8]                      None\n  46 Ops.CMPLT            dtypes.bool                      [42, 37]                     None\n  47 Ops.AND              dtypes.bool                      [44, 46]                     None\n  48 Ops.AND              dtypes.bool                      [45, 43]                     None\n  49 Ops.AND              dtypes.bool                      [48, 47]                     None\n  50 Ops.LOAD             dtypes.float                     [29, 39, 49]                 None\n  51 Ops.CONST            dtypes.weakint                   []                           674\n  52 Ops.CAST             dtypes.int                       ['674']                      dtypes.int\n  53 Ops.MUL              dtypes.int                       [11, 52]                     None\n  54 Ops.MUL              dtypes.int                       [14, 7]                      None\n  55 Ops.ADD              dtypes.int                       [53, 54]                     None\n  56 Ops.ADD              dtypes.int                       [8, 55]                      None\n  57 Ops.INDEX            dtypes.float                     [2, 56]                      None\n  58 Ops.STORE            dtypes.void                      [57, 50]                     None\n  59 Ops.SINK             dtypes.void                      [58]                         KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m251\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m337\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m2\\x1b[0m',",
+    "lines": 60,
+    "clipped": false
+   },
+   "source": "typedef unsigned int uint;\n#define INFINITY (__int_as_float(0x7f800000))\n#define NAN (__int_as_float(0x7fffffff))\ntemplate <class T, class F> __device__ __forceinline__ T tg_bitcast(F v) { union U { F f; T t; }; U u; u.f = v; return u.t; }\nextern \"C\" __global__ void __launch_bounds__(2) E_251_337_2(float* data0_169174, float* data1_1000000) {\n  int gidx0 = blockIdx.x; /* 337 */\n  int gidx1 = blockIdx.y; /* 251 */\n  int lidx0 = threadIdx.x; /* 2 */\n  float val0 = (((1<gidx0)&(gidx0<335)&(0<(gidx1+lidx0))&((lidx0+(gidx1<<1))<501))?*(data1_1000000+((gidx1*4000)+(lidx0*2000)+(gidx0*3)+-2005)):0.0f);\n  *(data0_169174+(gidx0+(gidx1*674)+(lidx0*337))) = val0;\n}",
+   "time_us": 67.58,
+   "ptx": {
+    "text": "//\n// Generated by NVIDIA NVVM Compiler\n//\n// Compiler Build ID: CL-36424714\n// Cuda compilation tools, release 13.0, V13.0.88\n// Based on NVVM 7.0.1\n//\n\n.version 9.0\n.target sm_89\n.address_size 64\n\n\t// .globl\tE_251_337_2\n\n.visible .entry E_251_337_2(\n\t.param .u64 E_251_337_2_param_0,\n\t.param .u64 E_251_337_2_param_1\n)\n.maxntid 2, 1, 1\n{\n\t.reg .pred \t%p<6>;\n\t.reg .f32 \t%f<5>;\n\t.reg .b32 \t%r<13>;\n\t.reg .b64 \t%rd<9>;\n\n\n\tld.param.u64 \t%rd1, [E_251_337_2_param_0];\n\tld.param.u64 \t%rd2, [E_251_337_2_param_1];\n\tmov.u32 \t%r1, %ctaid.x;\n\tadd.s32 \t%r4, %r1, -2;\n\tsetp.gt.u32 \t%p1, %r4, 332;\n\tmov.u32 \t%r2, %tid.x;\n\tmov.u32 \t%r3, %ctaid.y;\n\tadd.s32 \t%r5, %r3, %r2;\n\tsetp.lt.s32 \t%p2, %r5, 1;\n\tor.pred  \t%p3, %p1, %p2;\n\tadd.s32 \t%r6, %r5, %r3;\n\tsetp.gt.s32 \t%p4, %r6, 500;\n\tmov.f32 \t%f4, 0f00000000;\n\tor.pred  \t%p5, %p3, %p4;\n\t@%p5 bra \t$L__BB0_2;\n\n\tcvta.to.global.u64 \t%rd3, %rd2;\n\tmul.lo.s32 \t%r7, %r3, 4000;\n\tmad.lo.s32 \t%r8, %r2, 2000, %r7;\n\tadd.s32 \t%r9, %r8, -2005;\n\tmad.lo.s32 \t%r10, %r1, 3, %r9;\n\tmul.wide.s32 \t%rd4, %r10, 4;\n\tadd.s64 \t%rd5, %rd3, %rd4;\n\tld.global.f32 \t%f4, [%rd5];\n\n$L__BB0_2:\n\tmad.lo.s32 \t%r11, %r3, 674, %r1;\n\tmad.lo.s32 \t%r12, %r2, 337, %r11;\n\tcvta.to.global.u64 \t%rd6, %rd1;\n\tmul.wide.s32 \t%rd7, %r12, 4;\n\tadd.s64 \t%rd8, %rd6, %rd7;\n\tst.global.f32 \t[%rd8], %f4;\n\tret;\n\n}\n",
+    "lines": 62,
+    "clipped": false
+   },
+   "ptxas_info": "ptxas info    : 0 bytes gmem\nptxas info    : Compiling entry function 'E_251_337_2' for 'sm_89'\nptxas info    : Function properties for E_251_337_2\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas info    : Used 14 registers, used 0 barriers, 368 bytes cmem[0]\nptxas info    : Compile time = 2.463 ms",
+   "sass": {
+    "text": "\n\tcode for sm_89\n\t.target\tsm_89\n\n\t\tFunction : E_251_337_2\n\t.headerflags\t@\"EF_CUDA_SM89 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM89)\"\n        /*0000*/                   MOV R1, c[0x0][0x28] ;                       /* 0x00000a0000017a02 */\n                                                                                /* 0x000fe40000000f00 */\n        /*0010*/                   S2R R9, SR_TID.X ;                           /* 0x0000000000097919 */\n                                                                                /* 0x000e220000002100 */\n        /*0020*/                   MOV R3, 0x7d0 ;                              /* 0x000007d000037802 */\n                                                                                /* 0x000fe20000000f00 */\n        /*0030*/                   ULDC.64 UR4, c[0x0][0x118] ;                 /* 0x0000460000047ab9 */\n                                                                                /* 0x000fe20000000a00 */\n        /*0040*/                   MOV R11, 0x4 ;                               /* 0x00000004000b7802 */\n                                                                                /* 0x000fe20000000f00 */\n        /*0050*/                   S2R R4, SR_CTAID.Y ;                         /* 0x0000000000047919 */\n                                                                                /* 0x000e220000002600 */\n        /*0060*/                   MOV R7, RZ ;                                 /* 0x000000ff00077202 */\n                                                                                /* 0x000fc60000000f00 */\n        /*0070*/                   S2R R5, SR_CTAID.X ;                         /* 0x0000000000057919 */\n                                                                                /* 0x000e620000002500 */\n        /*0080*/                   IADD3 R0, R9, R4, RZ ;                       /* 0x0000000409007210 */\n                                                                                /* 0x001fe40007ffe0ff */\n        /*0090*/                   IADD3 R2, R5, -0x2, RZ ;                     /* 0xfffffffe05027810 */\n                                                                                /* 0x002fe40007ffe0ff */\n        /*00a0*/                   ISETP.GE.AND P0, PT, R0.reuse, 0x1, PT ;     /* 0x000000010000780c */\n                                                                                /* 0x040fe20003f06270 */\n        /*00b0*/                   IMAD.IADD R0, R0, 0x1, R4 ;                  /* 0x0000000100007824 */\n                                                                                /* 0x000fc600078e0204 */\n        /*00c0*/                   ISETP.GT.U32.OR P0, PT, R2, 0x14c, !P0 ;     /* 0x0000014c0200780c */\n                                                                                /* 0x000fc80004704470 */\n        /*00d0*/                   ISETP.GT.OR P0, PT, R0, 0x1f4, P0 ;          /* 0x000001f40000780c */\n                                                                                /* 0x000fda0000704670 */\n        /*00e0*/              @!P0 IMAD R0, R4, 0x2, R9 ;                       /* 0x0000000204008824 */\n                                                                                /* 0x000fc800078e0209 */\n        /*00f0*/              @!P0 IMAD R0, R0, R3, -0x7d5 ;                    /* 0xfffff82b00008424 */\n                                                                                /* 0x000fc800078e0203 */\n        /*0100*/              @!P0 IMAD R0, R5, 0x3, R0 ;                       /* 0x0000000305008824 */\n                                                                                /* 0x000fc800078e0200 */\n        /*0110*/              @!P0 IMAD.WIDE R2, R0, R11, c[0x0][0x168] ;       /* 0x00005a0000028625 */\n                                                                                /* 0x000fca00078e020b */\n        /*0120*/              @!P0 LDG.E R7, [R2.64] ;                          /* 0x0000000402078981 */\n                                                                                /* 0x000ea2000c1e1900 */\n        /*0130*/                   IMAD R0, R4, 0x2a2, R5 ;                     /* 0x000002a204007824 */\n                                                                                /* 0x000fc800078e0205 */\n        /*0140*/                   IMAD R0, R9, 0x151, R0 ;                     /* 0x0000015109007824 */\n                                                                                /* 0x000fc800078e0200 */\n        /*0150*/                   IMAD.WIDE R4, R0, R11, c[0x0][0x160] ;       /* 0x0000580000047625 */\n                                                                                /* 0x000fca00078e020b */\n        /*0160*/                   STG.E [R4.64], R7 ;                          /* 0x0000000704007986 */\n                                                                                /* 0x004fe2000c101904 */\n        /*0170*/                   EXIT ;                                       /* 0x000000000000794d */\n                                                                                /* 0x000fea0003800000 */\n        /*0180*/                   BRA 0x180;                                   /* 0xfffffff000007947 */\n                                                                                /* 0x000fc0000383ffff */\n        /*0190*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*01a0*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*01b0*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*01c0*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*01d0*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*01e0*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*01f0*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0200*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0210*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0220*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0230*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0240*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0250*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0260*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n        /*0270*/                   NOP;                                         /* 0x0000000000007918 */\n                                                                                /* 0x000fc00000000000 */\n\t\t..........\n\n",
+    "lines": 89,
+    "clipped": false
+   }
+  }
+ ],
+ "check": {
+  "max_abs_err": 0.0,
+  "max_abs_ref": 4.588780403137207,
+  "tol": 4.588780403137207e-06,
+  "ok": true,
+  "shape": [
+   502,
+   337
+  ],
+  "dtype": "float32"
+ },
+ "compile_and_run_s": 0.319,
+ "kernel_times_us": [
+  [
+   "E_251_337_2",
+   67.58
+  ]
+ ]
+}

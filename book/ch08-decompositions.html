@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>8. Decompositions: exp, sin, integer math · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+.c8-ax { fill: var(--muted); font: 10.5px var(--mono); }
+.c8-tree-svg { width: 100%; display: block; }
+.c8-tree-svg .c8-node, .c8-tree-svg .c8-edge { opacity: 0; transition: opacity .45s ease, transform .45s ease; }
+.c8-tree-svg.grown .c8-node, .c8-tree-svg.grown .c8-edge { opacity: 1; }
+.c8-edge { fill: none; stroke: #33445a; stroke-width: 1.5; }
+.c8-op { fill: #fff; font: 600 11px var(--mono); } .c8-leaf { fill: #c3ccd6; font: 11px var(--mono); }
+.c8-tree-note { margin-top: 8px; font-size: 14px; color: #c3ccd6; }
+.c8-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.c8-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.c8-ctl { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.c8-num { width: 90px; font-family: var(--mono); }
+.c8-exp-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
+.c8-steps { margin: 0; padding-left: 22px; font-size: 13.5px; }
+.c8-steps li { padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; transition: background .4s, box-shadow .4s; }
+.c8-steps li.lit { background: rgba(251, 191, 36, .12); box-shadow: inset 3px 0 var(--s-render); }
+.c8-steps li.done { background: rgba(52, 211, 153, .06); }
+.c8-steps .v { font: 12.5px var(--mono); color: #e6edf3; }
+.c8-steps .why { color: var(--muted); font-size: 12.5px; }
+.c8-horner { display: grid; grid-template-columns: auto auto; gap: 0 12px; font: 11.5px var(--mono); margin: 4px 0; color: #c3ccd6; justify-content: start; }
+.c8-horner .hv { color: var(--s-codegen); }
+.c8-bits { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); margin: 2px 0; overflow: hidden; }
+.c8-bl { width: 130px; flex: none; color: var(--muted); text-align: right; }
+.c8-bf { display: flex; transition: transform .9s cubic-bezier(.2, .8, .2, 1); }
+.c8-bf.from-low { transform: translateX(299px); transition: none; }
+.c8-bf i { font-style: normal; width: 13px; text-align: center; border-right: 1px solid #10161e; color: #4b5563; }
+.c8-bf i.one { color: #fff; font-weight: 700; }
+.c8-bf i.s { background: #3a1616; } .c8-bf i.e { background: rgba(251, 191, 36, .2); } .c8-bf i.m { background: rgba(96, 165, 250, .12); }
+.c8-bits.res .c8-bl { color: var(--s-codegen); }
+.c8-warn { color: var(--s-render); font-size: 12px; margin: 4px 0; }
+.c8-cap { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.c8-sin-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
+.c8-wheel { width: 100%; max-width: 280px; }
+.c8-sin-plots { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; border-top: 1px solid var(--line); }
+.c8-t { margin: 0; font: 12.5px var(--mono); } .c8-t th { font-family: var(--sans); font-weight: 500; }
+.c8-path { font-size: 13px; margin-top: 8px; color: #c3ccd6; }
+.c8-idiv-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.c8-idiv-out p { font-size: 14px; margin: 10px 0 0; }
+.c8-good { color: var(--good); } .c8-bad { color: var(--bad); }
+svg.c8-plot-exp, .c8-sin-plots svg { width: 100%; display: block; }
+@media (max-width: 1000px) { .c8-exp-grid, .c8-sin-grid, .c8-sin-plots { grid-template-columns: 1fr; } .c8-idiv-grid { grid-template-columns: 1fr 1fr; } }
+</style></head>
+<body><main>
+<div class="kicker">Chapter 8</div><h1>Decompositions: exp, sin, integer math</h1>
+<p class="lede">A Tensor library offers dozens of math functions. A GPU has a few dozen instructions. In between, tinygrad rewrites
+every method into a handful of transcendental primitives plus ordinary arithmetic, and late in codegen it asks the renderer which
+primitives it can spell natively. Whatever it cannot spell is expanded into polynomials, bit tricks and selects built from
+UOps. This chapter follows <code>exp</code>, <code>sin</code> and <code>a // 7 + a % 10</code> through that machinery to the
+SASS that ran on the L4, and shows why software <code>exp</code> costs nothing here while software <code>sin</code> triples the run time.</p>
+<div class="pipeline" data-active="tensor,codegen"></div>
+
+<h2>Two layers of decomposition</h2>
+<p>Decomposition happens twice, at opposite ends of the pipeline, for different reasons.</p>
+<p><b>In the frontend</b>, Tensor methods are written in terms of a small set of ops. <code>Tensor.exp</code> does not create an
+EXP op; there is none. It multiplies by 1/ln 2 and calls <code>exp2</code>
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L519"></a>. <code>log</code> is <code>log2(x)·ln 2</code>
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L837"></a>, <code>cos</code> is <code>sin(π/2 − x)</code>
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L506"></a>, <code>sigmoid</code> is <code>1/(1 + 2^(−x/ln 2))</code>
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L692"></a>, and <code>tanh</code> is <code>2·sigmoid(2x) − 1</code>
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L764"></a>. After this layer, the only transcendental UOps left are
+<code>EXP2</code>, <code>LOG2</code>, <code>SIN</code>, <code>SQRT</code> and <code>RECIPROCAL</code>, plus one more:
+<code>Tensor.pow</code> emits <code>Ops.POW</code> <a class="src" data-src="tinygrad/mixin/elementwise.py#L564"></a>, which has its
+own derivative <a class="src" data-src="tinygrad/mixin/gradient.py#L61"></a>. Autograd only needs derivatives for those six. POW
+never reaches a renderer: in codegen the symbolic rewriter turns integer and half-integer constant exponents into multiplies (and a sqrt)
+<a class="src" data-src="tinygrad/uop/symbolic.py#L176"></a> and everything else into EXP2/LOG2 with <code>xpow</code>
+<a class="src" data-src="tinygrad/uop/symbolic.py#L450"></a>, so every backend only needs to implement the five.</p>
+<p><b>In codegen</b>, after the optimizer has finished and the kernel has been devectorized, the <code>early decompositions</code>
+and <code>late decompositions</code> passes ask the renderer what it supports. The question is literal: the supported ops are
+the keys of the renderer's <code>code_for_op</code> dictionary <a class="src" data-src="tinygrad/codegen/__init__.py#L364"></a>.
+Any op not in that tuple gets a pattern that rewrites it into ops that are.</p>
+<p>Pick a method below to see what UOps the frontend makes of it. The yellow boxes are the five primitives the renderer is
+asked about later.</p>
+<div id="c8-tree" class="reveal"></div>
+<p>Note how much of <code>gelu</code> is gone in the real kernel. The formula in the source is
+<code>0.5·x·(1 + tanh(√(2/π)·(x + 0.044715·x³)))</code> <a class="src" data-src="tinygrad/mixin/elementwise.py#L787"></a>.
+<code>tanh</code> expands to <code>2σ − 1</code>, and the symbolic rewriter folds <code>0.5·(1 + (2σ − 1))</code> down to
+<code>σ</code>. <code>x**3</code> is a constant integer power, which <code>simplify_pow</code> turns into <code>x·x·x</code>
+<a class="src" data-src="tinygrad/uop/symbolic.py#L20"></a> before the general <code>xpow</code> path can see it. The captured
+kernel is one exp2 and one reciprocal per element:</p>
+<div class="kernel-view" data-key="gelu/default" data-tabs="source,sass" data-tab="source" data-highlight="exp2|MUFU"></div>
+<p>The SASS shows 12 <code>MUFU</code> instructions for 4 elements. Four are <code>MUFU.EX2</code>, one per exp2. The other
+eight are <code>MUFU.RCP</code>: <code>1/x</code> in CUDA C is a correctly rounded division, which ptxas builds from a reciprocal
+estimate plus refinement, with a subroutine (the four <code>CALL.REL.NOINC</code>) for the hard cases.</p>
+
+<h2>Where the renderer decides</h2>
+<p>Here is the codegen tail that does the work. It runs after <code>final symbolic</code> and before the renderer-specific
+<code>final rewrite</code>:</p>
+<pre class="code static" data-lang="python">
+sink = graph_rewrite(sink, pm_cast_float_alu, name="cast float alu operands")
+supported_ops = tuple(ren.code_for_op.keys())
+pm_decomp = symbolic_simple+get_simplifying_rewrite_patterns(supported_ops)
+sink = graph_rewrite(sink, pm_decomp, name="early decompositions")
+sink = graph_rewrite(sink, pm_dtype_decomps+pm_commit_weak, ctx=(set(), ren), name="decomp dtypes")
+pm_decomp = pm_decomp+\
+  get_late_rewrite_patterns(supported_ops, bool(DISABLE_FAST_IDIV))+\
+  get_transcendental_patterns(supported_ops, TRANSCENDENTAL>=2)
+sink = graph_rewrite(sink, pm_decomp, ctx=ren, name="late decompositions")
+</pre>
+<p>That is <a class="src" data-src="tinygrad/codegen/__init__.py#L359"></a> to
+<a class="src" data-src="tinygrad/codegen/__init__.py#L373"></a>. The three pattern builders are each cached on the tuple of
+supported ops, so a renderer gets its own fixed set of rewrites.</p>
+<ul>
+<li><code>get_simplifying_rewrite_patterns</code> <a class="src" data-src="tinygrad/codegen/decomp/op.py#L76"></a>: Python's
+floor division and floor modulo become C's truncating <code>CDIV</code>/<code>CMOD</code>, powers of two become shifts and masks,
+<code>MAX</code> becomes compare + where if the target lacks it.</li>
+<li><code>get_late_rewrite_patterns</code> <a class="src" data-src="tinygrad/codegen/decomp/op.py#L93"></a>: multiply by
+2^k becomes a shift, optional magic-number division, <code>MULACC</code> fusion for targets that list it.</li>
+<li><code>get_transcendental_patterns</code> <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L267"></a>:</li>
+</ul>
+<pre class="code static" data-lang="python">
+for op,f in ((Ops.EXP2, xexp2), (Ops.LOG2, xlog2), (Ops.SIN, xsin)):
+  if op not in ops or force_transcendental:
+    pat += [(UPat(op, dtype=TRANSCENDENTAL_DTYPES, src=(UPat.var("d"),)), f), ...]
+if Ops.SQRT not in ops or force_transcendental: pat.append((UPat(Ops.SQRT, ...), lambda d: xpow(d, d.const_like(0.5))))
+</pre>
+<p>So there are two reasons a software transcendental gets inlined: the renderer has no native version, or
+<code>TRANSCENDENTAL</code> is at least 2 (the default is 1, <a class="src" data-src="tinygrad/helpers.py#L239"></a>). The CUDA C
+renderer has all of them: <code>exp2(x)</code>, <code>log2(x)</code>, <code>sin(x)</code>, <code>sqrt(x)</code> and
+<code>(1/x)</code> come from the base C renderer, with <code>hexp2</code>/<code>hsin</code>/… overrides for half and bfloat16
+<a class="src" data-src="tinygrad/renderer/cstyle.py#L419"></a>. tinygrad's own PTX renderer also has all of them, but as the
+hardware approximations <code>ex2.approx</code>, <code>lg2.approx</code>, <code>sin.approx</code>, <code>sqrt.approx</code>,
+<code>rcp.approx</code> <a class="src" data-src="tinygrad/renderer/ptx.py#L19"></a>. tinygrad's CPU LLVM IR renderer has no math
+library to call and no EXP2, LOG2 or SIN in its <code>code_for_op</code> <a class="src" data-src="tinygrad/renderer/llvmir.py#L151"></a>,
+so it gets the software versions from the generic <code>get_transcendental_patterns</code> above. (The <code>xexp2</code>/<code>xlog2</code>
+import in <a class="src" data-src="tinygrad/renderer/llvmir.py#L5"></a> is only used by <code>AMDLLVMRenderer</code>, for float64,
+<a class="src" data-src="tinygrad/renderer/llvmir.py#L245"></a>.)</p>
+<p>The decision matters less than it looks for CUDA C, because "native" there means "call the CUDA math library". The C
+function <code>sin</code> is not an instruction; it is libdevice's <code>sinf</code>, a few hundred instructions of its own.
+The next sections compare what each choice costs on the L4.</p>
+
+<h2>exp: the default kernel</h2>
+<p>With the default settings, <code>a.exp()</code> on a 1024×1024 float32 tensor gives one kernel. The <code>MUL</code> by
+1.4426950216293335 came from the frontend; <code>EXP2</code> rendered as the C call <code>exp2</code>:</p>
+<div class="kernel-view" data-key="exp/default" data-tabs="source,ptx,sass,ptxas" data-tab="source" data-highlight="exp2|ex2|MUFU|-126"></div>
+<p>Switch to the PTX and SASS tabs. NVRTC compiled <code>exp2f</code> to <code>ex2.approx.f32</code>, a single PTX instruction,
+and ptxas turned each of those into four SASS instructions:</p>
+<pre class="code static" data-lang="sass">
+FSETP.GEU.AND P0, PT, R7, -126, PT ;
+@!P0 FMUL R7, R7, 0.5 ;
+MUFU.EX2 R11, R7 ;
+@!P0 FMUL R11, R11, R11 ;
+</pre>
+<p><code>MUFU.EX2</code> is the hardware's special-function unit: one 2^x per lane, but it flushes results below 2^−126 (the
+denormal range) to zero. The non-flushing <code>ex2.approx.f32</code> must keep them, so ptxas guards it: if the argument is below
+−126, halve it, compute 2^(d/2), and square the result. This is the whole cost of the default exp: 4 FMUL for the scale, 4
+compare, 8 predicated FMUL, 4 MUFU. The SASS has 33 instructions (not counting padding NOPs) and uses 16 registers.</p>
+
+<h2>exp in software: xexp2, step by step</h2>
+<p>Setting <code>TRANSCENDENTAL=2</code> makes <code>get_transcendental_patterns</code> replace <code>EXP2</code> with
+<code>xexp2</code> <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L193"></a> even though CUDA has it. It is a
+SLEEF-style implementation targeting 1 ulp, built entirely from UOps. The algorithm is the classic one, and every step is visible
+in the captured kernel:</p>
+<ol>
+<li><b>Mask specials.</b> <code>_lazy_map_numbers</code> replaces ±inf and NaN with 0 so the arithmetic below stays finite; they are
+patched back at the end. In the C source these are the <code>alu2..alu5</code> selects.</li>
+<li><b>Range reduction.</b> <code>q = rintk(x)</code> rounds half away from zero by adding ±0.5 and truncating
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L22"></a>; <code>s = x − q</code> is in [−½, ½].</li>
+<li><b>Polynomial.</b> <code>polyN(s, [...])</code> with 7 float32 coefficients
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L209"></a>. <code>polyN</code> is a Horner fold,
+<code>acc*x + c</code> for each coefficient <a class="src" data-src="tinygrad/helpers.py#L151"></a>.</li>
+<li><b>Scale by 2^q.</b> <code>ldexp2k(u, q)</code> multiplies by <code>pow2if(q&gt;&gt;1)</code> and <code>pow2if(q − q&gt;&gt;1)</code>
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L47"></a>. <code>pow2if(n)</code> is a bit trick:
+<code>(n + 127) &lt;&lt; 23</code>, bitcast to float, is exactly 2^n <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L27"></a>.</li>
+<li><b>Clamp.</b> d ≥ 128 gives +inf, d &lt; −150 gives 0, NaN gives NaN.</li>
+</ol>
+<p>Move the slider. The figure runs these exact steps in float32 with fused multiply-adds, as the kernel does, and reports the
+error against a float64 exp. Press "animate" to walk through the steps and watch the exponent field get built by a shift.</p>
+<div id="c8-exp2" class="reveal"></div>
+<div class="callout"><p><b>CPU experiment, to check the figure.</b> On <code>DEV=CPU</code> with <code>TRANSCENDENTAL=2</code>,
+tinygrad's own <code>Tensor([...]).exp2()</code> for x = −149.5, −126.3, −3.7, −0.5, 0, 0.25, 1, 2.5, 10.3, 63.9, 100.1, 127.9
+returned the same twelve float32 values, bit for bit, as this page's JavaScript emulation.</p></div>
+<p>Why split q in two? For q = 128 a single <code>pow2if(128)</code> would need an exponent field of 255, which means infinity.
+Splitting into 64 + 64 keeps both factors normal, and the product u·2^64·2^64 still rounds correctly to the largest floats. The
+same split makes results near 2^−149 (denormals) come out right: 2^−75 · 2^−75 multiplied by u underflows gracefully instead of
+producing a garbage exponent.</p>
+<p>Here is the CUDA C this produces, next to the SASS:</p>
+<div class="code-compare" data-left="exp/transcendental2|0|source" data-right="exp/transcendental2|0|sass" data-labels="CUDA C (TRANSCENDENTAL=2)|SASS" data-highlight="tg_bitcast|FFMA|LEA R|0x3f800000"></div>
+<p>A few things to read in it:</p>
+<ul>
+<li>The polynomial is the nested <code>((((0.00015359208919107914f*alu29)+0.0013392627006396651f)*alu29)+…</code> expression. In
+SASS it is six <code>FFMA</code> per element: ptxas contracted each multiply-add pair into one fused instruction (NVRTC contracts
+by default). The first coefficient lives in a register (<code>0x39210d90</code> is 0.00015359209f) and the rest are immediates.</li>
+<li><code>tg_bitcast&lt;float&gt;((int)(((alu25+127)&lt;&lt;23)))</code> is <code>pow2if</code>. In SASS it is one instruction,
+<code>LEA R10, R5, 0x3f800000, 0x17</code>: shift R5 left by 23 and add 0x3f800000, which is 127&lt;&lt;23 (the bit pattern of
+1.0f). The <code>tg_bitcast</code> template from the kernel prefix compiles to nothing.</li>
+<li>ptxas turned the <code>d ≥ 128 ? inf : …</code> select into a real branch, the <code>BSSY</code>/<code>@P0 BRA</code>/<code>BSYNC</code>
+blocks: when the answer is inf, the polynomial is skipped. That is why there are 5 <code>BRA</code> and 4 <code>BSSY</code> in a
+kernel whose C source has no <code>if</code>.</li>
+</ul>
+<div class="split">
+<div class="sass-mix" data-key="exp/default" data-title="SASS mix, exp default (ex2.approx)"></div>
+<div class="sass-mix" data-key="exp/transcendental2" data-title="SASS mix, exp TRANSCENDENTAL=2"></div>
+</div>
+<p>33 instructions became 151, and the four <code>MUFU</code> are gone. And yet:</p>
+<div class="bars" data-keys="exp/default,exp/transcendental2" data-labels="exp, ex2.approx (default)|exp, xexp2 (TRANSCENDENTAL=2)"></div>
+<p>The two kernels ran in 24.58 µs and 23.55 µs; the software version was not slower. Both read 4 MB and write 4 MB. At the L4's
+roughly 300 GB/s that is about 28 µs of DRAM traffic, more than the measured times, so part of the input must be served from the
+48 MB L2 left warm between timing runs. Either way both kernels are limited by memory traffic, not math, and ~30 extra
+float instructions per element disappear into the shadow of the loads. The difference between the two times is run-to-run noise,
+not a speedup. Accuracy against numpy is identical too: the largest error is 1.52587890625e-05 for both, on outputs up to 92.8,
+where one float32 ulp is 7.6e-06. Both are within 2 ulp.</p>
+
+<h2>sin: the expensive one</h2>
+<p>Sine is harder than exp because its range reduction is harder. For exp, subtracting an integer is exact. For sine you must
+subtract a multiple of π, and π is irrational: x − q·π in float32 loses digits as q grows, and for x around 10^5 a naive
+reduction has only two or three correct digits left. Drag x below, switch between the two reduction schemes, and press "unwind" to watch x wrap
+around the circle.</p>
+<div id="c8-sin" class="reveal"></div>
+<p>tinygrad's <code>xsin</code> <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L170"></a> works like this:</p>
+<ol>
+<li>Mask ±inf/NaN to 0, take |x| and remember the sign.</li>
+<li><b>Cody–Waite</b> reduction modulo π for small |x| <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L115"></a>:
+q = round(|x|/π), then r = |x| − q·π computed as four FMAs with π split into −3.1414794921875, −0.000113159…, −1.98e-9 and
+−1.2e-10 <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L138"></a>. The leading pieces have few mantissa bits,
+so q·piece is exact and the sum stays accurate. The error plot shows what this buys over a single float32 π.</li>
+<li><b>Payne–Hanek</b> reduction for large |x| <a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L66"></a>:
+multiply the mantissa by 190 bits of 2/π (<code>two_over_pi_f</code>) with 64-bit integer arithmetic, and read the quadrant from
+the top two bits.</li>
+<li>An odd degree-9 polynomial <code>sin_poly</code> (5 coefficients) on the reduced argument
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L152"></a>, with the sign set by the parity of q.</li>
+</ol>
+<p>The catch is step 3. A GPU kernel cannot take one path for some lanes and another for others without paying for both, so
+<code>xsin</code> computes <i>both</i> reductions for every element and selects with
+<code>(x_abs&lt;switch_over).where(sin_poly_small(...), sin_poly_large(...))</code>
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L187"></a>. Only <code>fast=True</code> skips Payne–Hanek, and
+the pattern never passes it. Our inputs are standard normal, all far below the switch-over of 30, so all the Payne–Hanek work is
+thrown away.</p>
+<div class="kernel-view" data-key="sin/transcendental2" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="/cast1[01]|CALL|MUFU.RCP"></div>
+<p>The C source is 271 lines for four elements. Look at the highlighted divisions <code>cast10/cast11</code>: they are
+<code>_shr_lazy</code>, which shifts right by dividing by <code>pow2if(y)</code> cast to uint64
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L94"></a>. The divisor is a runtime value, so nvcc cannot
+strength-reduce it, and a 64-bit integer division has no instruction on the GPU. In the SASS each one is a
+branch: if the divisor fits in 32 bits, an inline path (<code>I2F.U32.RP</code>, <code>MUFU.RCP</code> for a reciprocal estimate,
+one Newton step); otherwise a <code>CALL.REL.NOINC 0x33e0</code> to the 64-bit division subroutine: 12 of each for 4 elements. ptxas needed 62 registers. (The captured SASS listing stops at offset 0x2ea0, so the subroutine at
+0x33e0 is not shown and the instruction mix below covers the 747 instructions before the cut.)</p>
+<p>The default kernel is different in kind. <code>sin(x)</code> in CUDA C is libdevice's <code>sinf</code>:</p>
+<div class="kernel-view" data-key="sin/default" data-tabs="source,ptx,sass,ptxas" data-tab="sass" data-highlight="0.6366197|105615|LDG.E.CONSTANT|STL|DMUL"></div>
+<p>Read the first 20 instructions of the SASS and you will recognize the algorithm from the figure in quadrant mode: multiply by
+2/π (<code>FMUL R0, R8, 0.63661974668502807617</code>), convert to an integer quadrant (<code>F2I.NTZ</code>), and reduce with three
+FFMAs by π/2 split as 1.5707962512969970703, 7.5497894158615963534e-08, 5.3903029534742383927e-15. Then
+<code>FSETP.GE.AND P0, PT, |R8|, 105615, PT</code> and <code>@!P0 BRA</code>: if |x| is below 105615 the whole Payne–Hanek part is
+jumped over. That slow path is a loop of <code>LDG.E.CONSTANT</code> over the <code>__cudart_i2opi_f</code> table (2/π in bytes,
+declared in the PTX), stores to a 32-byte local stack frame (<code>STL</code>), and a <code>DMUL</code> in double precision. Then
+it evaluates a sine or cosine polynomial, chosen per lane with <code>FSEL</code> on the low bit of the quadrant. There is no
+<code>MUFU.SIN</code> anywhere: libdevice computes sine with FFMAs. Only <code>sin.approx.f32</code>, which tinygrad's PTX renderer
+emits <a class="src" data-src="tinygrad/renderer/ptx.py#L21"></a>, uses the hardware sine unit (the book has no L4 capture of a
+PTX-renderer sine).</p>
+<div class="split">
+<div class="sass-mix" data-key="sin/default" data-title="SASS mix, sin default (libdevice sinf)"></div>
+<div class="sass-mix" data-key="sin/transcendental2" data-title="SASS mix, sin TRANSCENDENTAL=2 (first 747 instructions)"></div>
+</div>
+<div class="bars" data-keys="exp/default,sin/default,sin/transcendental2" data-labels="exp default|sin default (sinf)|sin TRANSCENDENTAL=2"></div>
+<p>libdevice's sine is a branch, and every lane takes the short side, so its cost stays inside the memory time: 23.55 µs, about
+the same as exp. tinygrad's software sine is straight-line code with both reductions and the 64-bit divisions, and that is enough
+work to make the kernel compute-bound: 69.63 µs, about three times as long. Accuracy is fine in both: the largest errors are
+5.96e-08 (default) and 1.19e-07 (software), one or two float32 ulps of 1.0.</p>
+<div class="callout"><p><b>The lesson for decompositions.</b> On a GPU a <code>where</code> evaluates both sides. A
+decomposition that is "only taken for large inputs" in scalar code is paid for by every element unless the compiler can turn the
+select into a branch, as ptxas did for exp's inf case, or unless the code is written with a branch, as libdevice is.</p></div>
+
+<h2>Integer division and modulo</h2>
+<p>The third example is <code>a // 7 + a % 10</code> on int32. Python semantics are floor division and floor modulo:
+<code>-7 // 2 == -4</code> and <code>-7 % 2 == 1</code>. C rounds toward zero: <code>-7 / 2 == -3</code>, <code>-7 % 2 == -1</code>.
+The early decompositions translate one into the other <a class="src" data-src="tinygrad/codegen/decomp/op.py#L64"></a>:</p>
+<pre class="code static" data-lang="python">
+def floordiv_to_idiv(a:UOp, b:UOp) -> UOp:
+  if (a.vmin >= 0 and b.vmin > 0) or (a.vmax <= 0 and b.vmax < 0): return a.alu(Ops.CDIV, b)
+  return a.alu(Ops.CDIV, b) - (a.alu(Ops.CMOD, b).ne(0) & (a<0).ne(b<0))
+</pre>
+<p>If the symbolic range of <code>a</code> proves it non-negative, floor and truncation agree and a plain <code>/</code> is
+emitted. Our inputs are in [0, 2^20), but tinygrad doesn't know that: a value loaded from an int32 buffer can be anything in the
+int32 range. So the kernel carries the correction terms, for both the division and the modulo
+(<a class="src" data-src="tinygrad/codegen/decomp/op.py#L68"></a>, <code>r + (r≠0 and a&lt;0 ? 10 : 0)</code>). Step through the
+passes to see the <code>FLOORDIV</code> disappear in <code>early decompositions</code>:</p>
+<div class="pass-stepper" data-key="int_divmod/default" data-kernel="0" data-stages="codegen" data-start="early decompositions"></div>
+<div class="kernel-view" data-key="int_divmod/default" data-tabs="source,ptx,sass" data-tab="source" data-highlight="/7|%10|%7|IMAD.HI|mul.hi"></div>
+<p>The source still says <code>val0.x/7</code> and <code>val0.x%10</code>. tinygrad's own magic-number division
+(<code>fast_idiv</code>) did not run, for two separate reasons:</p>
+<ul>
+<li><code>DISABLE_FAST_IDIV</code> defaults to 1, with the comment <code># TODO: this is broken for some indexing</code>
+<a class="src" data-src="tinygrad/helpers.py#L244"></a>.</li>
+<li>Even when enabled, it only fires on values known to be non-negative <a class="src" data-src="tinygrad/codegen/decomp/op.py#L107"></a>.</li>
+</ul>
+<p>On CUDA it does not matter, because NVVM does the same strength reduction. In the PTX tab, <code>/7</code> became
+<code>mul.hi.s32 %r54, %r6, -1840700269</code> followed by add, shifts and a sign fix-up; <code>%10</code> became
+<code>mul.hi.s32 …, 1717986919</code>, then <code>x − 10·q</code>. In SASS those are <code>IMAD.HI R16, R4, -0x6db6db6d, R2</code>
+and <code>IMAD.HI R9, R5, 0x66666667, RZ</code>. 0x66666667 is ⌈2^34/10⌉, and −0x6db6db6d is 0x92492493 = ⌈2^34/7⌉ read as a
+signed int. There is no division instruction in the kernel; the 92 instructions for 4 elements are multiplies, shifts, adds and
+selects, and the kernel ran in 22.53 µs, the same memory-bound time as the float kernels.</p>
+<p>tinygrad's <code>magicgu</code> computes the same kind of constant, adapted from Hacker's Delight chapter 10
+<a class="src" data-src="tinygrad/codegen/decomp/op.py#L10"></a>, and like that version it takes the largest possible dividend
+<code>vmax</code> as an input, so a small known range gets a small magic number that fits in 32 bits. Try it:</p>
+<div id="c8-idiv" class="reveal"></div>
+<p>A <b>CPU experiment</b> shows what happens when tinygrad can prove the range. Rendering CUDA C (with tinygrad's
+<code>NVCCRenderer</code>, which prints the same C as the CUDA renderer) for a 4096-element int32 tensor gave:</p>
+<pre class="code static" data-lang="c">
+// (a & 1023) // 7, DISABLE_FAST_IDIV=1 (default)
+make_int4(((val0.x&1023)/7), ...
+// (a & 1023) // 7, DISABLE_FAST_IDIV=0: vmax is 1023, magicgu(1023, 7) = (1171, 13)
+make_int4((((val0.x&1023)*1171)>>13), ...
+// a // 8 and a % 8: powers of two never need magic numbers
+make_int4((val0.x>>3), ...        make_int4((val0.x&7), ...
+</pre>
+<p>The last line is the rule at <a class="src" data-src="tinygrad/codegen/decomp/op.py#L80"></a> and
+<a class="src" data-src="tinygrad/codegen/decomp/op.py#L84"></a>: in two's complement, an arithmetic shift right by k <i>is</i>
+floor division by 2^k and a mask <i>is</i> floor modulo, for negative numbers too. So power-of-two division gets no correction
+terms at all, which matters a lot for index arithmetic, where every <code>//</code> and <code>%</code> from a reshape is by a
+shape that is very often a power of two.</p>
+
+<h2>Smaller decompositions you have already seen</h2>
+<p><b>MAX.</b> The C renderers have no MAX in <code>code_for_op</code>, so
+<code>(UPat(Ops.MAX), lambda m: (m.src[0] &lt; m.src[1]).where(m.src[1], m.src[0]))</code> fires
+<a class="src" data-src="tinygrad/codegen/decomp/op.py#L89"></a>. The <code>max_cols</code> kernel from chapter 5 shows it as
+<code>((val1&lt;val0)?val0:val1)</code>:</p>
+<div class="kernel-view" data-key="max_cols/default" data-tabs="source,sass" data-tab="source" data-highlight="\?|FSEL|FSETP|FMNMX"></div>
+<p>ptxas does not always turn this back into a hardware max. Its SASS has 78 <code>FSETP</code> + 78 <code>FSEL</code> pairs and
+only 2 <code>FMNMX</code>. The reason is NaN: <code>(a&lt;b)?b:a</code> returns <code>a</code> whenever either operand is NaN (so it
+propagates a NaN in <code>a</code> and drops one in <code>b</code>), while <code>FMNMX</code> returns the non-NaN operand, so it can only be used where the compiler
+can rule NaN out. The PTX renderer lists MAX <a class="src" data-src="tinygrad/renderer/ptx.py#L30"></a> and emits
+<code>max.f32</code> directly.</p>
+<p><b>relu.</b> <code>relu</code> is <code>(self &gt; 0).where(self, 0)</code> by design, not <code>maximum(x, 0)</code>
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L680"></a>; the comment says the maximum version would pass half the gradient
+at 0. In the <code>fused_chain</code> kernel it renders as <code>((0.0f&lt;alu1)?alu1:0.0f)</code>, and here ptxas <i>did</i>
+produce 4 <code>FMNMX</code>: comparing with the constant 0 is NaN-safe in the right way.</p>
+<p><b>Multiplication by a power of two</b> becomes a shift for integers (<code>x * 2^k → x &lt;&lt; k</code>,
+<a class="src" data-src="tinygrad/codegen/decomp/op.py#L98"></a>). That is where every <code>(gidx0&lt;&lt;7)+(lidx0&lt;&lt;2)</code>
+in this book's kernels comes from.</p>
+<p><b>Half-precision transcendentals</b> are not polynomial-expanded in half: <code>exp</code> casts to float32 first
+<a class="src" data-src="tinygrad/mixin/elementwise.py#L519"></a>, and for float types outside float16/32/64 (bfloat16, fp8) the
+transcendental patterns cast to float32, apply the op, and cast back
+<a class="src" data-src="tinygrad/codegen/decomp/transcendental.py#L273"></a>.</p>
+
+<h2>PyTorch: libdevice all the way</h2>
+<div class="callout torch">
+<p>PyTorch never decomposes these itself. Eager mode calls ATen's <code>exp_kernel_cuda</code> and <code>sin_kernel_cuda</code>
+(templated <code>vectorized_elementwise_kernel&lt;4, …&gt;</code>), compiled ahead of time with nvcc. Inductor emits Triton with
+<code>tl_math</code>/<code>libdevice</code> calls, and Triton links NVIDIA's libdevice bitcode, so the math is the same
+library tinygrad's default CUDA C path ends up in.</p>
+</div>
+<div class="torch-view" data-key="exp/torch" data-tabs="output,ttir,ptx,sass" data-tab="ttir" data-highlight="__nv_expf|ex2|MUFU|0x17|SHF.L"></div>
+<p>In the TTIR, <code>exp</code> is <code>tt.extern_elementwise … symbol = "__nv_expf"</code>. libdevice's <code>expf</code> is
+itself a decomposition, and a familiar one. In the SASS, per element:</p>
+<ul>
+<li><code>FFMA.FTZ R4, R2, R6, 0.5</code> and <code>FFMA.FTZ.RM R4, R4, R7, 12582913</code> round x·log₂e to an integer using
+the "add 1.5·2^23" trick.</li>
+<li><code>SHF.L.U32 R4, R4, 0x17</code> shifts that integer into the exponent field: tinygrad's <code>pow2if</code> again.</li>
+<li>Two FFMAs (with 1.4426950216293334961 and the low-order part 1.925963033500011079e-08) form the fraction, and
+<code>MUFU.EX2</code> computes 2^fraction.</li>
+<li>One <code>FMUL</code> combines them.</li>
+</ul>
+<p>So libdevice uses the hardware unit for the small part only, where it is accurate, and does the range reduction in software. The
+<code>.FTZ</code> flags come from Triton compiling with flush-to-zero. Triton compiled this kernel twice (pick the copy in
+the selector): the first copy, shown by default, loads two floats per thread (<code>LDG.E.64</code>); the second loads eight with two
+<code>LDG.E.128</code>, where tinygrad loads four with one.</p>
+<div class="torch-view" data-key="sin/torch" data-tabs="ttir,sass" data-tab="sass" data-highlight="0.6366197|105615|MUFU|STL|DMUL"></div>
+<p>Sine is <code>math.sin</code> in TTIR, which lowers to <code>__nv_sinf</code>: the same 2/π multiply, the same 105615
+threshold, the same local-memory Payne–Hanek fallback, and no <code>MUFU.SIN</code>. The only difference from tinygrad's default
+kernel is FTZ and the vector width.</p>
+<div class="callout warn"><p>The PyTorch captures report 5.09 µs for Inductor's exp and 5.79 µs for its sine. Those are
+torch.profiler kernel times, measured differently from tinygrad's CUDA-event timing, and 8 MB in 5 µs is faster than the L4's
+DRAM, which suggests the data was still in its 48 MB L2 cache. Compare the instruction streams across frameworks, not these
+absolute times.</p></div>
+
+<h2>Summary</h2>
+<ul>
+<li>The frontend reduces every math method to <code>EXP2</code>, <code>LOG2</code>, <code>SIN</code>, <code>SQRT</code>,
+<code>RECIPROCAL</code> plus ALU ops. Late in codegen, each renderer's <code>code_for_op</code> keys decide which of them stay.</li>
+<li>CUDA C keeps all of them and delegates to the CUDA math library: <code>exp2</code> → <code>ex2.approx</code> →
+<code>MUFU.EX2</code> with a denormal guard; <code>sin</code> → libdevice <code>sinf</code> with FFMA polynomials and a
+branched Payne–Hanek path, no <code>MUFU.SIN</code>.</li>
+<li><code>TRANSCENDENTAL=2</code> forces tinygrad's SLEEF-derived polynomials. Software exp (range reduction, 7-term Horner,
+exponent built by <code>(q+127)&lt;&lt;23</code>) costs nothing in a memory-bound kernel: 23.55 vs 24.58 µs. Software sin computes
+both reductions for every element, including 64-bit divisions, and takes 69.63 vs 23.55 µs.</li>
+<li>Floor division and modulo become truncating C operators plus correction terms unless the range is known to be
+non-negative; powers of two become shifts and masks. Magic-number division is off by default in tinygrad, and NVVM does it
+anyway (<code>IMAD.HI</code> with 0x66666667 and 0x92492493).</li>
+<li>MAX becomes compare + select on CUDA C; ptxas recovers <code>FMNMX</code> only where NaN semantics allow.</li>
+</ul>
+<p>The next chapter takes the decomposed, linearized uops and follows them through the last three steps: rendering text,
+compiling it, and the SASS the hardware actually runs.</p>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch08.js"></script></body></html>

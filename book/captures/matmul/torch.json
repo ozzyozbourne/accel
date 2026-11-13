@@ -1,0 +1,57 @@
+{
+ "example": "matmul",
+ "variant": "torch",
+ "torch_version": "2.14.1+cu130",
+ "triton_version": "3.8.0",
+ "gpu": "NVIDIA L4",
+ "eager_kernels": [
+  {
+   "name": "Memset (Device)",
+   "us": 0.42
+  },
+  {
+   "name": "ampere_sgemm_128x64_nn",
+   "us": 149.18
+  }
+ ],
+ "inductor_kernels": [
+  {
+   "name": "Memset (Device)",
+   "us": 0.45
+  },
+  {
+   "name": "ampere_sgemm_128x64_nn",
+   "us": 149.18
+  }
+ ],
+ "inductor_debug": {
+  "fx_graph": {
+   "text": "class <lambda>(torch.nn.Module):\n    def forward(self, arg0_1: \"f32[1024, 1024]\", arg1_1: \"f32[1024, 1024]\"):\n        # File: /content/book/harness/examples.py:60 in <lambda>, code: tg=lambda T: T[\"a\"] @ T[\"b\"], ref=lambda N: N[\"a\"] @ N[\"b\"], torch=lambda X: X[\"a\"] @ X[\"b\"], tol=1e-2,\n        mm: \"f32[1024, 1024]\" = torch.ops.aten.mm.default(arg0_1, arg1_1);  arg0_1 = arg1_1 = None\n        return (mm,)",
+   "lines": 5,
+   "clipped": false
+  },
+  "fx_graph_files": 2,
+  "ir_pre_fusion": {
+   "text": "op0: ExternKernelSchedulerNode(ExternKernelOut)\nop0.writes = [StarDep(name='buf0', mode=None)]\nop0.unmet_dependencies = []\nop0.met_dependencies = [StarDep(name='arg0_1', mode=None), StarDep(name='arg1_1', mode=None)]\nop0.min_input_distance = 0\nop0.max_input_distance = 0\nop0.outputs = [\n    buf0: ExternKernelOut\n    buf0.layout = FixedLayout('cuda:0', torch.float32, size=[1024, 1024], stride=[1024, 1])\n    buf0.users = [NodeUser(node=OUTPUT, can_inplace=False, is_weak=False)]\n]\nop0.node.kernel = extern_kernels.mm\n\n",
+   "lines": 14,
+   "clipped": false
+  },
+  "ir_pre_fusion_files": 2,
+  "ir_post_fusion": {
+   "text": "op0: ExternKernelSchedulerNode(ExternKernelOut)\nop0.writes = [StarDep(name='buf0', mode=None)]\nop0.unmet_dependencies = []\nop0.met_dependencies = [StarDep(name='arg0_1', mode=None), StarDep(name='arg1_1', mode=None)]\nop0.min_input_distance = 0\nop0.max_input_distance = 0\nop0.outputs = [\n    buf0: ExternKernelOut\n    buf0.layout = FixedLayout('cuda:0', torch.float32, size=[1024, 1024], stride=[1024, 1])\n    buf0.users = [NodeUser(node=OUTPUT, can_inplace=False, is_weak=False)]\n]\nop0.node.kernel = extern_kernels.mm\n\n",
+   "lines": 14,
+   "clipped": false
+  },
+  "ir_post_fusion_files": 2,
+  "output_code": {
+   "text": "# AOT ID: ['0_inference']\nfrom ctypes import c_void_p, c_long, c_int\nimport torch\nimport math\nimport random\nimport os\nimport tempfile\nfrom math import inf, nan\nfrom cmath import nanj\nfrom torch._inductor.hooks import run_intermediate_hooks\nfrom torch._inductor.utils import maybe_profile\nfrom torch._inductor.codegen.memory_planning import _align as align\nfrom torch import device, empty_strided\nfrom torch._inductor.async_compile import AsyncCompile\nfrom torch._inductor.select_algorithm import extern_kernels\nfrom torch._C._dynamo.guards import copy_if_misaligned\n\naten = torch.ops.aten\ninductor_ops = torch.ops.inductor\n_quantized = torch.ops._quantized\nassert_size_stride = torch._C._dynamo.guards.assert_size_stride\nassert_size_stride_grouped = torch._C._dynamo.guards.assert_size_stride_grouped\nassert_alignment = torch._C._dynamo.guards.assert_alignment\nempty_strided_cpu = torch._C._dynamo.guards._empty_strided_cpu\nempty_strided_cpu_pinned = torch._C._dynamo.guards._empty_strided_cpu_pinned\nempty_strided_cuda = torch._C._dynamo.guards._empty_strided_cuda\nempty_strided_xpu = torch._C._dynamo.guards._empty_strided_xpu\nempty_strided_mtia = torch._C._dynamo.guards._empty_strided_mtia\nreinterpret_tensor = torch._C._dynamo.guards._reinterpret_tensor\nalloc_from_pool = torch.ops.inductor._alloc_from_pool\nasync_compile = AsyncCompile()\nempty_strided_p2p = torch._C._distributed_c10d._SymmetricMemory.empty_strided_p2p\n\n\nasync_compile.wait(globals())\ndel async_compile\n\nclass Runner:\n    def __init__(self, partitions):\n        self.partitions = partitions\n\n    def recursively_apply_fns(self, fns):\n        new_callables = []\n        for fn, c in zip(fns, self.partitions):\n            new_callables.append(fn(c))\n        self.partitions = new_callables\n\n    def call(self, args):\n        arg0_1, arg1_1 = args\n        args.clear()\n        assert_size_stride_grouped((arg0_1, arg1_1), ((1024, 1024), (1024, 1024)), ((1024, 1), (1024, 1)), 'input')\n        with torch.cuda._DeviceGuard(0):\n            torch.cuda.set_device(0)\n            arg0_1 = copy_if_misaligned(arg0_1)\n            arg1_1 = copy_if_misaligned(arg1_1)\n            buf0 = empty_strided_cuda((1024, 1024), (1024, 1), torch.float32)\n            # Topologically Sorted Source Nodes: [matmul], Original ATen: [aten.mm]\n            # [Provenance debug handles] extern_kernels.mm:1\n            extern_kernels.mm(arg0_1, arg1_1, out=buf0)\n            del arg0_1\n            del arg1_1\n        return (buf0, )\n\nrunner = Runner(partitions=[])\ncall = runner.call\nrecursively_apply_fns = runner.recursively_apply_fns\n\n\ndef get_args():\n    from torch._dynamo.testing import rand_strided\n    arg0_1 = rand_strided((1024, 1024), (1024, 1), device='cuda:0', dtype=torch.float32)\n    arg1_1 = rand_strided((1024, 1024), (1024, 1), device='cuda:0', dtype=torch.float32)\n    return [arg0_1, arg1_1]\n\n\ndef benchmark_compiled_module(args, times=10, repeat=10):\n    from torch._inductor.utils import print_performance\n    fn = lambda: call(list(args))\n    return print_performance(fn, times=times, repeat=repeat, device='cuda')\n\n\nif __name__ == \"__main__\":\n    from torch._inductor.wrapper_benchmark import compiled_module_main\n    args = get_args()\n    compiled_module_main('None', lambda times, repeat: benchmark_compiled_module(args, times=times, repeat=repeat))",
+   "lines": 85,
+   "clipped": false
+  },
+  "output_code_files": 2
+ },
+ "triton_kernels": [],
+ "check": {
+  "max_abs_err_compiled_vs_eager": 0.0
+ }
+}

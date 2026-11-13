@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>7. Tensor cores · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+.muted { color: var(--muted); }
+.fr-lab { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.fr-svg { width: 100%; display: block; }
+.fr-t { fill: var(--text); font-size: 13px; font-weight: 600; } .fr-op { fill: var(--muted); font-size: 26px; }
+.fr-ix { fill: #64748b; font-size: 9px; text-anchor: end; }
+.fr-c text { fill: #0b1220; font-size: 7.5px; text-anchor: middle; font-family: var(--mono); pointer-events: none; }
+.fr-c.sel rect { stroke: #fff; stroke-width: 1.6; }
+.fr-hl { fill: none; stroke: #fff; stroke-width: 1.2; stroke-dasharray: 4 3; }
+.fr-info { display: grid; grid-template-columns: 1fr 1.2fr; gap: 16px; font-size: 14px; margin-top: 10px; }
+.fr-t2 { margin: 0; font-size: 13px; } .fr-t2 td, .fr-t2 th { padding: 2px 8px; }
+table.fc td { font-size: 13px; } table.fc td:last-child { text-align: center; color: var(--good); font-weight: 700; }
+.axchip { display: inline-block; border: 1px solid; border-radius: 6px; padding: 0 6px; margin: 2px; font-family: var(--mono); font-size: 12px; }
+.axchip em { color: var(--muted); font-style: normal; font-size: 11px; }
+table.nd td { vertical-align: middle; }
+.chip.bad { background: #7f1d1d; color: #fecaca; }
+.tcc-row { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 12px; }
+.tcc-lab { width: 230px; flex: none; font-size: 13px; word-break: break-all; } .tcc-n { font-family: var(--mono); font-size: 20px; }
+.tcc-cv { max-width: 100%; }
+@media (max-width: 1000px) { .fr-info { grid-template-columns: 1fr; } }
+</style></head>
+<body><main>
+<div class="kicker">Chapter 7</div><h1>Tensor cores</h1>
+<p class="lede">An fp16 matmul of two 2048×2048 matrices with fp32 accumulation runs in 2.84 ms on the L4's ordinary CUDA cores and in 527 µs once tinygrad uses its tensor cores. In this chapter we follow the one opt that makes the difference, <code>TC</code>. We see where tinygrad describes the hardware (<code>tc.py</code>), how the opt reshapes the loop nest so that 32 threads each hold the right pieces of a 16×16 and a 16×8 matrix, how that becomes a <code>WMMA</code> UOp, a <code>__device__</code> helper with inline PTX, <code>mma.sync</code> in PTX and <code>HMMA.16816.F32</code> in SASS, and why the data still reaches the registers the slow way. PyTorch's cuBLAS kernel is the yardstick.</p>
+<div class="pipeline" data-active="codegen,render,compile"></div>
+
+<h2>The experiment</h2>
+<p>The <code>matmul_fp16</code> example multiplies two fp16 matrices and asks for an fp32 result:</p>
+<pre class="code static" data-lang="python">
+tg=lambda T: T["a"].matmul(T["b"], dtype=dtypes.float)    # a, b: 2048×2048 float16
+torch=lambda X: (X["a"] @ X["b"]).float()
+variants={"default": {}, "no_tc": {"TC": "0"}}
+</pre>
+<p><code>matmul(..., dtype=float)</code> ends up in <code>dot</code>, which computes <code>(x*w).sum(-1, dtype=dtype)</code> (<a class="src" data-src="tinygrad/mixin/op.py#L392"></a>). In the kernel AST the product is still fp16 and is cast to float before the REDUCE: <code>(a.index(...)*b.index(...)).cast(dtypes.float).reduce(..., arg=(Ops.ADD, 0))</code>. You can see it in the AST tab further down. That cast is the hook the tensor-core opt looks for.</p>
+<div class="bars" data-keys="matmul_fp16/no_tc,matmul_fp16/default,matmul_fp16/torch:eager,matmul_fp16/torch:inductor" data-labels="tinygrad TC=0|tinygrad default (tensor cores)|PyTorch eager (cuBLAS + cast)|PyTorch Inductor (cuBLAS + Triton cast)"></div>
+<table>
+<tr><th>variant</th><th>kernel</th><th>grid</th><th>block</th><th>regs</th><th>time</th><th>max abs error vs numpy</th></tr>
+<tr><td><code>TC=0</code></td><td><code>r_64_32_8_16_4_4_512_4</code></td><td>32 × 64</td><td>8 × 16</td><td>51</td><td>2841.6 µs</td><td>0.0475</td></tr>
+<tr><td>default</td><td><code>r_32_16_32_4_2_2_4_4_128_2</code></td><td>16 × 32</td><td>32 × 4</td><td>92</td><td>527.36 µs</td><td>0.00125</td></tr>
+</table>
+<p>That is a 5.4× speedup from one opt. The accuracy also improves by 38×. We come back to why in the TC=0 section. PyTorch is faster again: 213.31 µs for its cuBLAS kernel, plus a separate conversion kernel, because <code>(a @ b).float()</code> produces an fp16 matrix first and converts it afterwards.</p>
+
+<h2>What one mma.sync does</h2>
+<p>A tensor core instruction is a small matrix multiply-accumulate performed by a whole warp. The instruction tinygrad uses on the L4 (sm_89, Ada) is</p>
+<pre class="code static" data-lang="ptx">
+mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32  {d0,d1,d2,d3}, {a0,a1,a2,a3}, {b0,b1}, {c0,c1,c2,c3};
+</pre>
+<p>It computes D = A·B + C, with A 16×16 (M×K) in fp16, B 16×8 (K×N) in fp16, and C, D 16×8 in fp32. <code>.row.col</code> says A is row-major and B column-major (i.e. B<sup>T</sup> is row-major), which only matters for how elements are packed into registers. <code>.sync.aligned</code> means all 32 lanes of the warp must execute the same instruction together. No lane holds a whole row or column. The 256 elements of A, 128 of B and 128 of C are spread over the warp's registers in a fixed pattern that the PTX ISA documents as the "fragment layout": each lane holds 8 halves of A (in four 32-bit registers), 4 halves of B (two registers) and 4 floats of C (four registers).</p>
+<p>The pattern uses two numbers per lane: <code>groupID = lane &gt;&gt; 2</code> (0–7) and <code>threadID_in_group = lane % 4</code> (0–3). Lane L holds A rows groupID and groupID+8, at columns 2·tig, 2·tig+1 and those +8. It holds B column groupID, at k = 2·tig, 2·tig+1 and those +8. It holds C row groupID and groupID+8, at columns 2·tig and 2·tig+1. Press play to watch the lanes load their fragments in order and the mma produce C. Hover any cell, or use the slider, to pick a lane.</p>
+<div id="frag" data-keys="matmul_fp16/default"></div>
+<p>Two things to notice. First, each output element is a 16-long dot product, and the inputs for it are held by up to 8 different lanes (the dashed outline): the hardware exchanges operands between lanes inside the instruction. That is what makes it a warp instruction and not 32 independent ones. Second, the lanes' C elements are pairs of adjacent columns, so a lane can store <code>c0,c1</code> with one 8-byte store. tinygrad's epilogue does exactly that, as we will see.</p>
+<p>One <code>m16n8k16</code> is 16·8·16 = 2048 multiply-adds, 4096 FLOPs, in a single warp instruction. An FFMA does 32 multiply-adds per warp instruction, one per lane. That ratio, and the dedicated hardware behind it, is the whole point of tensor cores.</p>
+
+<h2>tinygrad's description of the hardware: tc.py</h2>
+<p>tinygrad does not hard-code the fragment layout into the CUDA renderer. It describes each tensor core as a <code>TensorCore</code> dataclass (<a class="src" data-src="tinygrad/codegen/opt/tc.py#L6"></a>–<a class="src" data-src="tinygrad/codegen/opt/tc.py#L73"></a>), and the optimizer turns that description into ordinary axis splits. The NVIDIA entries are at <a class="src" data-src="tinygrad/codegen/opt/tc.py#L76"></a>–<a class="src" data-src="tinygrad/codegen/opt/tc.py#L98"></a>:</p>
+<pre class="code static" data-lang="python">
+cuda_tc_opts = ("u0","l0","l0","l1","l1","l1","u1")  # shared by all shapes with M=16 N=8
+cuda_81616 = [TensorCore(dims=(8,16,16), threads=32, elements_per_thread=(8,4,4), dtype_in=di, dtype_out=do, opts=cuda_tc_opts,
+  swizzle=((('r1', 'r2', 'l2', 'l3', 'l4'), ('u1', 'r3'), ('l0', 'l1', 'u0', 'r0')),
+           (('r1', 'r2', 'u0', 'l0', 'l1'), ('r0', 'r3'), ('l2', 'l3', 'l4', 'u1'))))
+  for di,do in [(dtypes.half,dtypes.float), (dtypes.bfloat16,dtypes.float), (dtypes.half,dtypes.half)]]
+...
+cuda_sm80 = cuda_81616 + cuda_8168_f16 + cuda_8168_tf32
+cuda_sm89 = cuda_sm80 + cuda_81632_f8
+def get_cuda(arch): return cuda_sm89 if (ver:=int(arch[3:])) >= 89 else cuda_sm80 if ver >= 80 else cuda_sm75 if ver >= 75 else []
+</pre>
+<p><code>CUDARenderer.__init__</code> sets <code>self.tensor_cores = tc.get_cuda(arch)</code> (<a class="src" data-src="tinygrad/renderer/cstyle.py#L407"></a>). For sm_89 that is eight tensor cores, tried in list order: m16n8k16 for half→float, bf16→float and half→half, m16n8k8 for half→float and half→half, m16n8k8 TF32, and m16n8k32 for the two fp8 types. The fields:</p>
+<ul>
+<li><code>dims=(8,16,16)</code> is <strong>(N, M, K)</strong> (comment at <a class="src" data-src="tinygrad/codegen/opt/tc.py#L8"></a>), so <code>WMMA_8_16_16_half_float</code> is PTX's m16n8k16.</li>
+<li><code>threads=32</code>: one warp.</li>
+<li><code>elements_per_thread=(8,4,4)</code>: A, B and C elements per lane, exactly the 8 / 4 / 4 of the fragment layout.</li>
+<li><code>opts</code>: how to build the 8×16 output tile out of size-2 splits. <code>"u0"</code> upcasts dim 0 (N) by 2. <code>"l0"</code> splits N by 2 into a lane bit. <code>"l1"</code> and <code>"u1"</code> do the same for dim 1 (M).</li>
+<li><code>swizzle</code>: how lane, upcast and reduce bits are permuted for the A and B operands so their loads match the layout. Explained below.</li>
+</ul>
+<p>The <code>opts</code> string <em>is</em> the C fragment layout. Each split takes the current lowest bit of an index, so applying the seven opts in order assigns index bits:</p>
+<table>
+<tr><th>opt</th><th>dim</th><th>becomes</th><th>which bit of the 8×16 tile</th></tr>
+<tr><td><code>u0</code></td><td>N</td><td>upcast (register) bit</td><td>n bit 0 → selects c0 vs c1</td></tr>
+<tr><td><code>l0</code>, <code>l0</code></td><td>N</td><td>lane bits 0, 1</td><td>n bits 1, 2 → n = 2·(lane%4) + …</td></tr>
+<tr><td><code>l1</code> ×3</td><td>M</td><td>lane bits 2, 3, 4</td><td>m bits 0–2 → m = lane&gt;&gt;2 + …</td></tr>
+<tr><td><code>u1</code></td><td>M</td><td>upcast bit</td><td>m bit 3 → +8 rows, selects c0/c1 vs c2/c3</td></tr>
+</table>
+<p>So C[m][n] lives in lane <code>4·(m%8) + n/2</code> and register <code>c[(m/8)·2 + n%2]</code>, which is the PTX layout from the widget. <code>__post_init__</code> checks the consistency: 2<sup>#locals</sup> = threads = 32, 2<sup>#upcasts</sup> = C elements per thread = 4, N·M = 2<sup>7</sup> (<a class="src" data-src="tinygrad/codegen/opt/tc.py#L41"></a>).</p>
+<p>A and B don't use all of those bits (A doesn't depend on n, B doesn't depend on m), and they need the K bits too. K = 16 is split into four size-2 reduce bits <code>r0..r3</code> (<code>get_reduce_axes</code>, <a class="src" data-src="tinygrad/codegen/opt/tc.py#L34"></a>). The swizzle lists, for each operand, which bit to put in each lane slot, upcast slot and reduce slot. For A: lane slots <code>(r1, r2, l2, l3, l4)</code> mean lane bits 0–1 carry k bits 1–2 (k = 2·tig + …) and lane bits 2–4 keep the m bits (row = groupID). Upcast slots <code>(u1, r3)</code> are the +8 row bit and the +8 k bit. Reduce slots <code>(l0, l1, u0, r0)</code> hold the n bits (on which A does not depend) and k bit 0, the two halves packed in one register. That gives A's 2<sup>3</sup> = 8 elements per lane. B's swizzle does the same with the n bits on lane bits 2–4 (column = groupID) and <code>(r0, r3)</code> as its 2 upcast bits. The assertions at <a class="src" data-src="tinygrad/codegen/opt/tc.py#L60"></a>–<a class="src" data-src="tinygrad/codegen/opt/tc.py#L72"></a> check that these counts give 8 and 4 elements per thread.</p>
+
+<h2>When the TC opt applies</h2>
+<p>The heuristic tries tensor cores before anything else (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L28"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L41"></a>). It does so if <code>TC</code> (the <code>USE_TC</code> ContextVar, default 1, <a class="src" data-src="tinygrad/helpers.py#L238"></a>) is positive and the kernel has exactly one reduce axis. It tries <code>Opt(OptOps.TC, axis, (TC_SELECT, TC_OPT, TC))</code> for axis 0, 1 and 2, and the first that does not raise wins. <code>Scheduler._apply_tc_opt</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L214"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L311"></a>) decides:</p>
+<ol>
+<li>The first REDUCE must be an ADD whose source is a MUL, possibly under a CAST (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L217"></a>). Our <code>(a*b).cast(float)</code> qualifies.</li>
+<li>It walks the renderer's tensor cores, or only number <code>TC_SELECT</code> if that is not −1. On CUDA, fp32-input (TF32) cores are skipped unless <code>ALLOW_TF32=1</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L226"></a>). The rest must match exactly: <code>dtype_in</code> equals both MUL inputs and <code>dtype_out</code> equals the reduce's dtype (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L227"></a>). half·half reduced into float matches the first entry, m16n8k16 half→float.</li>
+<li>It picks the N, M and K ranges: ranges only in the second input, ranges only in the first, and reduce ranges, with <code>axis</code> indexing their product (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L229"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L241"></a>). Each must be divisible by the TC dims. Otherwise padding is needed, which requires <code>TC_OPT</code> ≥ 2 (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L252"></a>). <code>TC_OPT</code> defaults to 0 for the heuristic, but BEAM's TC actions use 2 (<a class="src" data-src="tinygrad/codegen/opt/search.py#L23"></a>).</li>
+<li>It creates one WARP range of 32 (id −1) and applies the seven <code>opts</code>. Each <code>l</code> split uses <code>warp % 2</code> as its new "range" and halves the warp (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L260"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L269"></a>). Then it splits K four times by 2 into UNROLL (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L271"></a>).</li>
+<li>Unless <code>TC=2</code> (shape only, for debugging, <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L275"></a>), it applies the swizzle permutation to the two MUL sources and replaces the REDUCE with <code>UOp.wmma(a, b, zeros, dims, device, threads, tc_upcast_axes)</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L302"></a>). The rest of the K range (2048/16 = 128) stays as a REDUCE around the WMMA (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L306"></a>).</li>
+</ol>
+<p>Back in the heuristic, a successful TC is followed by up to three more opts and then an early return. It upcasts M, then N, by the first of 5, 4, 3, 2 that divides, and adds a LOCAL of 4 (or 2) on N. Here that gives <code>UPCAST(0,4)</code>, <code>UPCAST(1,4)</code> and <code>LOCAL(1,4)</code>, the captured <code>applied_opts</code>:</p>
+<div id="tc-trace" data-keys="matmul_fp16/default"></div>
+<p>Read the name with chapter 6's rules: <span style="color:#60a5fa">32·16</span> blocks; a <span style="color:#a5f3fc">32</span>-lane warp and <span style="color:#22d3ee">4</span> warps per block; upcasts <span style="color:#facc15">2·2</span> from the TC (the c-register bits) and <span style="color:#facc15">4·4</span> from the heuristic; a reduce loop of <span style="color:#f87171">128</span> and an unroll of <span style="color:#e879f9">2</span>. Of the four K bits the TC opt created, only the last (range id 8) still shows as an axis. The WMMA's A operand is built over it, which is visible in the <code>tc_upcast_axes</code> of the IR below. It is not an extra factor of K: 128 iterations × 16 = 2048. With <code>TC=2</code>, which applies the shape without building a WMMA, a variant of the CPU experiment (<code>tc2.py</code>) prints <code>r_32_16_32_4_2_2_4_4_128_2_2_2_2</code>, with all four bits.</p>
+<p>What one warp computes per loop iteration: the 4×4 upcast makes it 4 A fragments (64 rows) × 4 B fragments (32 columns), i.e. 16 mma per iteration. A block is 4 warps side by side along N: 64×128 outputs. The grid of 32×16 blocks covers 2048×2048. <code>TC=0</code> removes the TC attempt. The heuristic then takes the same path as the fp32 matmul in chapter 6 and produces <code>r_64_32_8_16_4_4_512_4</code>.</p>
+
+<h2>The WMMA UOp through the passes</h2>
+<p>The TC opt is applied inside <code>apply_opts</code>, which is not a named pass. The first snapshot that contains the <code>Ops.WMMA</code> is <code>flatten range</code>. Its arg is <code>((8, 16, 16), dtypes.half, 'CUDA', 32, tc_upcast_axes)</code>, the warp is <code>UOp.range(32, -1, AxisType.WARP)</code>, and the lane bits appear as chains of <code>//2</code> and <code>%2</code> on it. Step forward:</p>
+<div class="pass-stepper" data-key="matmul_fp16/default" data-kernel="0" data-stages="codegen" data-start="flatten range" data-title="Codegen passes of r_32_16_32_4_2_2_4_4_128_2"></div>
+<ul>
+<li><code>expander</code>: <code>expand_wmma</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L77"></a>) contracts the upcast axes into the WMMA's operand vectors. The arg's last field becomes <code>None</code>, and the operands become RESHAPE/PERMUTE of vectorized loads.</li>
+<li><code>remove reduces</code>: the accumulator becomes <code>float buf0[64]</code> (16 tiles × 4 floats), and <code>pm_wmma_add</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L108"></a>) folds the accumulate into the WMMA's C operand.</li>
+<li><code>*** expand broadcast / add loads</code> and <code>devectorize2</code>: <code>broadcast_and_devec_wmma</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L98"></a>) splits the 4×4 grid of tiles into 16 separate WMMAs, and loads are devectorized into scalars. The graph grows from 106 to 1021 UOps.</li>
+<li>Memory coalescing (which runs just before <code>add images</code> and is not a named pass in the capture) regroups adjacent scalar loads into vector loads; the node count drops to 947. A's pairs (adjacent along k) become <code>half2</code>. B's pairs are 2048 elements apart along k, so they stay scalar.</li>
+</ul>
+
+<h2>Rendering: a __device__ helper with inline PTX</h2>
+<p>CUDA C has no portable operator for this instruction, so the renderer emits one helper per distinct WMMA (<code>CUDARenderer.render_kernel</code>, <a class="src" data-src="tinygrad/renderer/cstyle.py#L441"></a>–<a class="src" data-src="tinygrad/renderer/cstyle.py#L468"></a>). It maps dtypes to PTX type names (<code>half</code> → <code>f16</code>, <code>float</code> → <code>f32</code>, <a class="src" data-src="tinygrad/renderer/cstyle.py#L451"></a>). It counts 32-bit registers per operand as <code>elements·itemsize/4</code>: 8 halves → 4, 4 halves → 2, 4 floats → 4. Then it writes an <code>asm</code> statement that ties C to the output with <code>"+r"</code> (read-write). The WMMA UOp itself renders as a call, <code>__WMMA_8_16_16_half_float(a, b, c)</code> (<a class="src" data-src="tinygrad/renderer/cstyle.py#L63"></a>).</p>
+<div class="kernel-view" data-key="matmul_fp16/default" data-tabs="ast,source,ptx,sass,ptxas" data-tab="source" data-highlight="WMMA|asm|mma\.sync|make_half8|make_half4|alu1 =|alu3 =|alu4 =|alu5 ="></div>
+<p>In the source, the lane index is <code>lidx0 = threadIdx.x</code> (32), and the fragment layout appears as <code>alu1 = (lidx0&gt;&gt;2)</code> (groupID) and <code>alu4 = (lidx0&amp;3)</code> (threadID_in_group). For A, <code>alu3</code> adds <code>alu1&lt;&lt;11</code> (row groupID; a row is 2048 halves) and <code>alu5 = alu4&lt;&lt;1</code> adds column 2·tig. For B, <code>alu70</code> adds <code>alu1</code> (column groupID) and <code>alu4&lt;&lt;12</code> (k = 2·tig, two rows of 2048). Each <code>make_half8</code> then packs four <code>half2</code> loads into an A operand, and each <code>make_half4</code> packs four scalar halves into a B operand. We can check these against the PTX layout mechanically. The table below traces every element of the 8 operands back to its load offset:</p>
+<div id="frag-check" data-keys="matmul_fp16/default"></div>
+<p>Lane 0's offsets match the layout exactly, and the lane-dependent base adds groupID rows and 2·tig columns, as the PTX ISA requires. The epilogue stores <code>make_float2((*(buf0+0)),(*(buf0+8)))</code>-style pairs to adjacent columns, and the <code>+16384</code> offsets are 8 rows down: C's <code>c0,c1</code> and <code>c2,c3</code>.</p>
+
+<h2>PTX and SASS: mma.sync becomes HMMA.16816.F32</h2>
+<p>NVRTC compiles the inline asm verbatim: on the PTX tab above there are 16 <code>mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32</code> lines per loop iteration. Notice how the same A registers (<code>{%r220, %r221, %r222, %r223}</code>) are reused across four of them, and the same B registers across another four: that is the 4×4 upcast doing register reuse at the fragment level. ptxas turns each into one SASS instruction, <code>HMMA.16816.F32</code> (on the SASS tab, e.g. <code>HMMA.16816.F32 R32, R72.reuse, R76, R32</code>). The <code>.reuse</code> flag tells the hardware to keep the A operand in the operand-reuse cache for the next instruction. The loop runs 128 times (<code>ISETP.NE.AND P0, PT, R84, 0x80</code>).</p>
+<div class="split">
+<div class="sass-mix" data-key="matmul_fp16/default" data-top="10" data-title="SASS mix: tensor cores (default)"></div>
+<div class="sass-mix" data-key="matmul_fp16/no_tc" data-top="10" data-title="SASS mix: TC=0"></div>
+</div>
+<p>The default kernel has 16 HMMA, 32 LDG and 32 STG. 32 <code>CS2R</code> zero the 64 accumulator registers two at a time, which accounts for most of the 92 registers ptxas reports (64 accumulators + 8 A + 8 B operand registers (ptxas keeps two A fragments live and reloads them) + addresses).</p>
+
+<h2>Synchronous, and no ldmatrix</h2>
+<p><strong><code>mma.sync</code> is synchronous.</strong> It is an ordinary instruction in the warp's stream. It reads its operands from registers and writes its result to registers, and the scheduler stalls a dependent instruction until the result is ready, exactly as for an FFMA with a longer latency. Nothing is asynchronous here. The asynchronous form, <code>wgmma.mma_async</code>, which is issued by a 128-thread warpgroup, reads B from shared memory (A may come from registers or shared memory) and is waited on with <code>wgmma.wait_group</code>, exists only on Hopper (<code>sm_90a</code>). It is not available on the L4's sm_89.</p>
+<p><strong>The data path is global memory → registers.</strong> The SASS has no <code>LDS</code>, no <code>LDSM</code> and no <code>BAR</code>: tinygrad's hand-coded TC kernel uses no shared memory at all. <code>ldmatrix</code> (SASS <code>LDSM</code>) loads 8×8 tiles <em>from shared memory</em> directly into the fragment layout, so it cannot help a kernel that never stages data in shared memory. Instead, every lane fetches its own fragment elements from global memory (through L1/L2):</p>
+<ul>
+<li>A: 16 <code>LDG.E</code> (32-bit) per iteration, each a <code>half2</code>, since A's fragment pairs are adjacent along k, which is the contiguous direction of row-major A.</li>
+<li>B: 16 <code>LDG.E.U16</code> (one half each), then 8 <code>PRMT</code> (byte permute) instructions to pack pairs into the 32-bit <code>b</code> registers. B's pairs run along k, which for row-major B means 4096 bytes apart.</li>
+<li>C: 32 <code>STG.E.64</code> in the epilogue, one per <code>(c0,c1)</code> or <code>(c2,c3)</code> pair.</li>
+</ul>
+<p>Within a warp, lanes with the same groupID read neighbouring bytes, and the caches absorb a lot of the reuse. But each fragment is reloaded by every warp that needs it, with 2-byte loads for B. This is the main reason tinygrad's TC kernel reaches about 27% of the tensor-core peak while cuBLAS reaches about two thirds.</p>
+
+<h2>Without tensor cores: TC=0</h2>
+<p>With <code>TC=0</code> the same AST goes through the fp32 recipe from chapter 6: 4×4 register tile, unroll 4, 8×16 threads. The source keeps the AST's numerics literally: each product is computed in <code>half</code> and then cast:</p>
+<div class="kernel-view" data-key="matmul_fp16/no_tc" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="buf0\+0\) =|half4 val|for \("></div>
+<p>ptxas maps this to <code>HMUL2</code> (two fp16 products in one instruction), two <code>HADD2.F32</code> (adding −0 to a half, which converts it to fp32) and two <code>FADD</code>. That is five instructions for two multiply-adds, where an fp32 kernel would use two FFMAs. The products are also rounded to fp16 before they are accumulated, which is why this variant's error is 0.0475 against the tensor-core kernel's 0.00125: the tensor core does not round each product to fp16 before accumulating in fp32. ptxas also unrolled the loop twice (the counter steps by 2 up to <code>0x200</code> = 512).</p>
+<div id="tc-cost" data-keys="matmul_fp16/default,matmul_fp16/no_tc"></div>
+<p>2560 instructions against 16 for the same arithmetic. The runtime ratio is 5.4×, not 160×, because the TC kernel is no longer limited by math instructions. It is limited by its loads and the operand traffic around them.</p>
+
+<h2>PyTorch: cuBLAS on tensor cores</h2>
+<div class="torch-view" data-key="matmul_fp16/torch" data-tabs="eager,output,ttir,ptx,sass" data-tab="eager"></div>
+<p>Eager PyTorch launches <code>ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_nn</code> (213.31 µs), then a generic copy kernel (<code>unrolled_elementwise_kernel&lt;direct_copy_kernel_cuda…&gt;</code>, 28.58 µs) for <code>.float()</code>. Under <code>torch.compile</code>, the matmul is still <code>extern_kernels.mm</code> (215.3 µs), and the conversion becomes the Triton kernel <code>triton_poi_fused__to_copy_0</code> (17.79 µs). Its TTIR, PTX and SASS are in the tabs. The cuBLAS kernel name reads, by cuBLAS's naming convention: an Ampere kernel (reused on Ada), fp16 inputs, "s1688" = fp32 accumulation with an m16n8k8 MMA shape, fp16 output, 128×128 block tile, 8-element (16-byte) global loads, and a multi-stage pipeline. We have no SASS for it in the captures, so take that decoding as a reading of the name. The structure it implies (shared-memory staging, 16-byte loads, pipelining) is exactly what tinygrad's hand-coded kernel lacks.</p>
+<div id="tc-tflops" data-keys="matmul_fp16/default,matmul_fp16/no_tc,matmul_fp16/torch"></div>
+<div class="callout torch">The two results are not numerically identical. <code>(a @ b).float()</code> rounds each output to fp16 first: at magnitudes around 256, the largest in this example, consecutive fp16 values are 0.25 apart. tinygrad's <code>matmul(b, dtype=float)</code> stores the fp32 accumulator directly, with no conversion kernel.</div>
+
+<h2>What to remember</h2>
+<ul>
+<li>On sm_89, a tensor core op is <code>mma.sync.m16n8k16</code>: a warp-wide, synchronous, register-to-register instruction doing 2048 multiply-adds. In SASS it is <code>HMMA.16816.F32</code>.</li>
+<li>The 32 lanes hold fixed fragments: lane L has rows/columns <code>L&gt;&gt;2</code> (+8) and <code>2·(L%4)</code> (+1, +8). tinygrad encodes this as seven size-2 splits (<code>cuda_tc_opts</code>) and per-operand swizzles in <code>tc.py</code>.</li>
+<li>The TC opt applies when the reduce is ADD over a MUL (optionally cast), the dtypes match a tensor core exactly, and the dims divide (or <code>TC_OPT=2</code> pads). It must be the first opt. Then the heuristic adds a 4×4 upcast and 4 warps per block.</li>
+<li>The WMMA UOp becomes a call to a generated <code>__device__</code> function with inline PTX. NVRTC passes it through and ptxas emits HMMA.</li>
+<li>tinygrad's hand-coded TC kernel loads fragments straight from global memory (no shared memory, no <code>ldmatrix</code>). It is 5.4× faster than CUDA cores and more accurate, and still 2.5× slower than cuBLAS's shared-memory pipeline.</li>
+</ul>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch07.js"></script></body></html>

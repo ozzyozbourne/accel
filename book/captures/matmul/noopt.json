@@ -1,0 +1,644 @@
+{
+ "example": "matmul",
+ "variant": "noopt",
+ "device": "CUDA",
+ "arch": "sm_89",
+ "chapter": 6,
+ "env": {
+  "DEV": "CUDA",
+  "NOOPT": "1"
+ },
+ "tinygrad_code": "\"matmul\": dict(chapter=6, inputs={\"a\": _f32(1024, 1024), \"b\": _f32(1024, 1024)},\n                 tg=lambda T: T[\"a\"] @ T[\"b\"], ref=lambda N: N[\"a\"] @ N[\"b\"], torch=lambda X: X[\"a\"] @ X[\"b\"], tol=1e-2,\n                 variants={\"default\": {}, \"noopt\": {\"NOOPT\": \"1\"}, \"beam2\": {\"BEAM\": \"2\"}}),",
+ "tensor_graph": {
+  "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc6 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc8 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 3)\nc10 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc14 = UOp(Ops.PERMUTE, dtypes.float, ((UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c1, c3)), c6))*UOp(Ops.PERMUTE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c8, c3)), c10)),), (0, 2, 1))),), (2, 0, 1))\nc15 = c14._rop(Ops.ADD, (0,))\nast = c15.sink()",
+  "lines": 8,
+  "clipped": false
+ },
+ "passes": [
+  {
+   "stage": "tensor",
+   "name": "number the uops",
+   "kernel": null,
+   "nodes": 17,
+   "changed": true,
+   "ms": 0.093,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc6 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc8 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 3)\nc10 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc14 = UOp(Ops.PERMUTE, dtypes.float, ((UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c1, c3)), c6))*UOp(Ops.PERMUTE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c8, c3)), c10)),), (0, 2, 1))),), (2, 0, 1))\nc15 = c14._rop(Ops.ADD, (0,)).rtag((0,))\nast = c15.sink()",
+    "lines": 8,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "early transform tensor graph",
+   "kernel": null,
+   "nodes": 21,
+   "changed": true,
+   "ms": 0.428,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 4)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc4 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))\nc5 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc8 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc10 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 3)\nc12 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc16 = UOp(Ops.PERMUTE, dtypes.float, ((UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c5, c3)), c8))*UOp(Ops.PERMUTE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c10, c3)), c12)),), (0, 2, 1))),), (2, 0, 1))\nc17 = c16._rop(Ops.ADD, (0,))\nc19 = c4.after(c4.store(c17)).rtag((0,))\nast = c19.sink()",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "finalize call",
+   "kernel": null,
+   "nodes": 21,
+   "changed": true,
+   "ms": 0.197,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 4)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc4 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))\nc5 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc8 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc10 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 3)\nc12 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc16 = UOp(Ops.PERMUTE, dtypes.float, ((UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c5, c3)), c8))*UOp(Ops.PERMUTE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c10, c3)), c12)),), (0, 2, 1))),), (2, 0, 1))\nc17 = c16._rop(Ops.ADD, (0,))\nc19 = c4.after(c4.store(c17))\nast = c19.sink()",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "replace bufs",
+   "kernel": null,
+   "nodes": 21,
+   "changed": true,
+   "ms": 0.226,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc4 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))\nc5 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc8 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc10 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc12 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc16 = UOp(Ops.PERMUTE, dtypes.float, ((UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c5, c3)), c8))*UOp(Ops.PERMUTE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c10, c3)), c12)),), (0, 2, 1))),), (2, 0, 1))\nc17 = c16._rop(Ops.ADD, (0,))\nc19 = c4.after(c4.store(c17))\nast = c19.sink()",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "multi_pm",
+   "kernel": null,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.076
+  },
+  {
+   "stage": "schedule",
+   "name": "earliest rewrites",
+   "kernel": null,
+   "nodes": 19,
+   "changed": true,
+   "ms": 2.061,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc5 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc7 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc9 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc10 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc14 = UOp(Ops.PERMUTE, dtypes.float, ((UOp(Ops.RESHAPE, dtypes.float, (c5, c7))*UOp(Ops.PERMUTE, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c9, c10)),), (0, 2, 1))),), (2, 0, 1))\nc15 = c14._rop(Ops.ADD, (0,))\nc17 = c1.after(UOp(Ops.RESHAPE, dtypes.float, (c1, c3)).store(c15))\nast = c17.sink()",
+    "lines": 10,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "convert copy to store",
+   "kernel": null,
+   "nodes": 19,
+   "changed": false,
+   "ms": 0.056
+  },
+  {
+   "stage": "schedule",
+   "name": "get realize",
+   "kernel": null,
+   "nodes": 19,
+   "changed": false,
+   "ms": 0.058
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 6,
+   "changed": true,
+   "ms": 14.757,
+   "ir": {
+    "text": "c1 = UOp.range(1024, 0, AxisType.PLACEHOLDER)\nc3 = UOp.range(1024, 1, AxisType.PLACEHOLDER)\nc4 = c1*UOp.const(1024, dtypes.weakint)+c3\nast = c4.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 6,
+   "changed": true,
+   "ms": 0.241,
+   "ir": {
+    "text": "c1 = UOp.range(1024, 0, AxisType.PLACEHOLDER)\nc3 = UOp.range(1024, 1, AxisType.PLACEHOLDER)\nc4 = c1*UOp.const(1024, dtypes.weakint)+c3\nast = c4.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 6,
+   "changed": true,
+   "ms": 0.207,
+   "ir": {
+    "text": "c1 = UOp.range(1024, 0, AxisType.PLACEHOLDER)\nc3 = UOp.range(1024, 1, AxisType.PLACEHOLDER)\nc4 = c1*UOp.const(1024, dtypes.weakint)+c3\nast = c4.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "apply rangeify",
+   "kernel": null,
+   "nodes": 22,
+   "changed": true,
+   "ms": 1.152,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 0, AxisType.WEAK)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.range(1024, 1, AxisType.WEAK)\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc9 = UOp.range(1024, 2, AxisType.REDUCE)\nc12 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc16 = c8.index((c4+c9))*c12.index((c9*UOp.const(1024, dtypes.weakint)+c5))\nc17 = c16.reduce(c9, arg=(Ops.ADD, 0))\nc19 = c1.index((c4+c5)).store(c17).end(c3, c5)\nc20 = c1.after(c19)\nast = c20.sink()",
+    "lines": 12,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "add device to deviceless",
+   "kernel": null,
+   "nodes": 22,
+   "changed": false,
+   "ms": 0.065
+  },
+  {
+   "stage": "schedule",
+   "name": "symbolic+reduce_collapse+debuf",
+   "kernel": null,
+   "nodes": 22,
+   "changed": false,
+   "ms": 7.772
+  },
+  {
+   "stage": "schedule",
+   "name": "limit buffers",
+   "kernel": null,
+   "nodes": 22,
+   "changed": false,
+   "ms": 0.871
+  },
+  {
+   "stage": "schedule",
+   "name": "stage to store",
+   "kernel": null,
+   "nodes": 22,
+   "changed": true,
+   "ms": 0.241,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA')).rtag(())\nc3 = UOp.range(1024, 0, AxisType.WEAK).rtag(())\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.range(1024, 1, AxisType.WEAK).rtag(())\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA')).rtag(())\nc9 = UOp.range(1024, 2, AxisType.REDUCE).rtag(())\nc12 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA')).rtag(())\nc16 = c8.index((c4+c9))*c12.index((c9*UOp.const(1024, dtypes.weakint)+c5))\nc17 = c16.reduce(c9, arg=(Ops.ADD, 0))\nc19 = c1.index((c4+c5)).store(c17).end(c3, c5)\nc20 = c1.after(c19)\nast = c20.sink()",
+    "lines": 12,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "kernel split",
+   "kernel": null,
+   "nodes": 20,
+   "changed": true,
+   "ms": 0.574,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 1, AxisType.WEAK)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.range(1024, 2, AxisType.WEAK)\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc9 = UOp.range(1024, 0, AxisType.REDUCE)\nc12 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc16 = c8.index((c4+c9))*c12.index((c9*UOp.const(1024, dtypes.weakint)+c5))\nc17 = c16.reduce(c9, arg=(Ops.ADD, 0))\nast = c1.index((c4+c5)).store(c17).end(c3, c5)",
+    "lines": 10,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "split kernels",
+   "kernel": null,
+   "nodes": 27,
+   "changed": true,
+   "ms": 1.007,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "remove indexing from call args",
+   "kernel": null,
+   "nodes": 27,
+   "changed": false,
+   "ms": 0.031
+  },
+  {
+   "stage": "schedule",
+   "name": "schedule to linear",
+   "kernel": null,
+   "nodes": 30,
+   "changed": true,
+   "ms": 34.363,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "params to buffers",
+   "kernel": null,
+   "nodes": 26,
+   "changed": true,
+   "ms": 0.035,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "resolve linear call",
+   "kernel": null,
+   "nodes": 26,
+   "changed": true,
+   "ms": 0.186,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "create COPY kernels for SDMA",
+   "kernel": null,
+   "nodes": 26,
+   "changed": false,
+   "ms": 0.521
+  },
+  {
+   "stage": "codegen",
+   "name": "multi_pm",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.074,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 1, AxisType.WEAK)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.range(1024, 2, AxisType.WEAK)\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc9 = UOp.range(1024, 0, AxisType.REDUCE)\nc12 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc16 = c8.index((c4+c9))*c12.index((c9*UOp.const(1024, dtypes.weakint)+c5))\nc17 = c16.reduce(c9, arg=(Ops.ADD, 0))\nc19 = c1.index((c4+c5)).store(c17).end(c3, c5)\nast = c19.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 11,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "early movement ops",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.085
+  },
+  {
+   "stage": "codegen",
+   "name": "load collapse",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 1.171
+  },
+  {
+   "stage": "codegen",
+   "name": "split ranges",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.453
+  },
+  {
+   "stage": "codegen",
+   "name": "initial symbolic",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 1.843
+  },
+  {
+   "stage": "codegen",
+   "name": "simplify ranges",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 5.173
+  },
+  {
+   "stage": "codegen",
+   "name": "flatten range",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.113
+  },
+  {
+   "stage": "codegen",
+   "name": "postopt symbolic",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.311
+  },
+  {
+   "stage": "codegen",
+   "name": "expander",
+   "kernel": 0,
+   "nodes": 21,
+   "changed": false,
+   "ms": 1.204
+  },
+  {
+   "stage": "codegen",
+   "name": "remove reduces",
+   "kernel": 0,
+   "nodes": 30,
+   "changed": true,
+   "ms": 3.135,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 1, AxisType.GLOBAL)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.range(1024, 2, AxisType.GLOBAL)\nc9 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc11 = UOp.const(0.0, dtypes.weakfloat)\nc13 = UOp.range(1024, 0, AxisType.REDUCE)\nc14 = c9.after(c9.after(c3, c5).store(c11), c13)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc18 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc23 = c14+c15.index((c4+c13))*c18.index((c13*UOp.const(1024, dtypes.weakint)+c5))\nc25 = c14.store(c23).end(c13).rtag('mergeable')\nc26 = c9.after(c25)\nc28 = c1.index((c4+c5)).store(c26).end(c3, c5)\nast = c28.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add local buffers",
+   "kernel": 0,
+   "nodes": 30,
+   "changed": false,
+   "ms": 0.118
+  },
+  {
+   "stage": "codegen",
+   "name": "add gpudims",
+   "kernel": 0,
+   "nodes": 30,
+   "changed": true,
+   "ms": 4.625,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx1', dtype=dtypes.weakint)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.special(1024, 'gidx0', dtype=dtypes.weakint)\nc9 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc11 = UOp.const(0.0, dtypes.weakfloat)\nc13 = UOp.range(1024, 0, AxisType.REDUCE)\nc14 = c9.after(c9.after(c3, c5).store(c11), c13)\nc15 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc18 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc23 = c14+c15.index((c4+c13))*c18.index((c13*UOp.const(1024, dtypes.weakint)+c5))\nc25 = c14.store(c23).end(c13).rtag('mergeable')\nc26 = c9.after(c25)\nc28 = c1.index((c4+c5)).store(c26).end(c3, c5)\nast = c28.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "*** expand broadcast / add loads",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": true,
+   "ms": 3.868,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx1', dtype=dtypes.weakint)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.special(1024, 'gidx0', dtype=dtypes.weakint)\nc10 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc13 = UOp(Ops.EXPAND, dtypes.weakfloat, (UOp.const(0.0, dtypes.weakfloat), UOp.const(1, dtypes.weakint)))\nc15 = UOp.range(1024, 0, AxisType.REDUCE)\nc16 = c10.after(c10.after(c3, c5).store(c13), c15)\nc17 = c16.load()\nc18 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc21 = c18.index((c4+c15)).load()\nc22 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc26 = c22.index((c15*UOp.const(1024, dtypes.weakint)+c5)).load()\nc29 = c17+UOp(Ops.EXPAND, dtypes.float, ((c21*c26), UOp.const(1, dtypes.weakint)))\nc31 = c16.store(c29).end(c15).rtag('mergeable')\nc33 = c10.after(c31).load()\nc35 = UOp(Ops.EXPAND, dtypes.float, (c1.index((c4+c5)), UOp.const(1, dtypes.weakint))).store(c33).end(c3, c5)\nast = c35.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "devectorize2",
+   "kernel": 0,
+   "nodes": 38,
+   "changed": true,
+   "ms": 3.459,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx1', dtype=dtypes.weakint)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.special(1024, 'gidx0', dtype=dtypes.weakint)\nc9 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc13 = UOp.const(0.0, dtypes.weakfloat)\nc15 = UOp.range(1024, 0, AxisType.REDUCE)\nc17 = c9.after(c9.after(c3, c5).index(UOp.const(0, dtypes.weakint)).store(c13), c15).index(UOp.const(0, dtypes.weakint))\nc18 = c17.load()\nc19 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc22 = c19.index((c4+c15)).load()\nc23 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc27 = c23.index((c15*UOp.const(1024, dtypes.weakint)+c5)).load()\nc29 = c18+c22*c27\nc31 = c17.store(c29).end(c15).rtag('mergeable')\nc34 = c9.after(c31).index(UOp.const(0, dtypes.weakint)).load()\nc36 = c1.index((c4+c5)).store(c34).end(c3, c5)\nast = c36.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "early symbolic",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": true,
+   "ms": 1.719,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx0', dtype=dtypes.weakint)\nc4 = UOp.special(1024, 'gidx1', dtype=dtypes.weakint)\nc5 = c4*UOp.const(1024, dtypes.weakint)\nc9 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc12 = UOp.const(0.0, dtypes.weakfloat)\nc14 = UOp.range(1024, 0, AxisType.REDUCE)\nc16 = c9.after(c9.index(UOp.const(0, dtypes.weakint)).store(c12), c14).index(UOp.const(0, dtypes.weakint))\nc17 = c16.load()\nc18 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc21 = c18.index((c5+c14)).load()\nc22 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc26 = c22.index((c3+c14*UOp.const(1024, dtypes.weakint))).load()\nc28 = c17+c21*c26\nc30 = c16.store(c28).end(c14).rtag('mergeable')\nc33 = c9.after(c30).index(UOp.const(0, dtypes.weakint)).load()\nc35 = c1.index((c3+c5)).store(c33).end(c4, c3)\nast = c35.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add images",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": true,
+   "ms": 6.984,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx0', dtype=dtypes.weakint)\nc4 = UOp.special(1024, 'gidx1', dtype=dtypes.weakint)\nc5 = c4*UOp.const(1024, dtypes.weakint)\nc9 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc12 = UOp.const(0.0, dtypes.weakfloat)\nc14 = UOp.range(1024, 0, AxisType.REDUCE)\nc16 = c9.after(c9.index(UOp.const(0, dtypes.weakint)).store(c12), c14).index(UOp.const(0, dtypes.weakint))\nc17 = c16.load()\nc18 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc21 = c18.index((c5+c14)).load()\nc22 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc26 = c22.index((c3+c14*UOp.const(1024, dtypes.weakint))).load()\nc28 = c17+c21*c26\nc30 = c16.store(c28).end(c14).rtag('mergeable')\nc33 = c9.after(c30).index(UOp.const(0, dtypes.weakint)).load()\nc35 = c1.index((c3+c5)).store(c33).end(c4, c3)\nast = c35.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "extra symbolic",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": false,
+   "ms": 0.244
+  },
+  {
+   "stage": "codegen",
+   "name": "lower all index dtypes",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": true,
+   "ms": 3.977,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx0', dtype=dtypes.int)\nc4 = UOp.special(1024, 'gidx1', dtype=dtypes.int)\nc5 = c4*UOp.const(1024, dtypes.int)\nc9 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.int),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc12 = UOp.const(0.0, dtypes.float)\nc14 = UOp.range(1024, 0, AxisType.REDUCE, dtype=dtypes.int)\nc16 = c9.after(c9.index(UOp.const(0, dtypes.int)).store(c12), c14).index(UOp.const(0, dtypes.int))\nc17 = c16.load()\nc18 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc21 = c18.index((c5+c14)).load()\nc22 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(2, dtypes.float, device='CUDA'))\nc26 = c22.index((c3+c14*UOp.const(1024, dtypes.int))).load()\nc28 = c17+c21*c26\nc30 = c16.store(c28).end(c14).rtag('mergeable')\nc33 = c9.after(c30).index(UOp.const(0, dtypes.int)).load()\nc35 = c1.index((c3+c5)).store(c33).end(c4, c3)\nast = c35.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "final symbolic",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": false,
+   "ms": 0.202
+  },
+  {
+   "stage": "codegen",
+   "name": "cast float alu operands",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": false,
+   "ms": 0.092
+  },
+  {
+   "stage": "codegen",
+   "name": "early decompositions",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": false,
+   "ms": 0.148
+  },
+  {
+   "stage": "codegen",
+   "name": "decomp dtypes",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": false,
+   "ms": 0.986
+  },
+  {
+   "stage": "codegen",
+   "name": "late decompositions",
+   "kernel": 0,
+   "nodes": 38,
+   "changed": true,
+   "ms": 1.736,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx0', dtype=dtypes.int)\nc4 = UOp.special(1024, 'gidx1', dtype=dtypes.int)\nc6 = c4<<UOp.const(10, dtypes.weakint)\nc10 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.int),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc13 = UOp.const(0.0, dtypes.float)\nc15 = UOp.range(1024, 0, AxisType.REDUCE, dtype=dtypes.int)\nc17 = c10.after(c10.index(UOp.const(0, dtypes.int)).store(c13), c15).index(UOp.const(0, dtypes.int))\nc18 = c17.load()\nc19 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc22 = c19.index((c6+c15)).load()\nc23 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(2, dtypes.float, device='CUDA'))\nc27 = c23.index((c3+(c15<<UOp.const(10, dtypes.weakint)))).load()\nc29 = c18+c22*c27\nc31 = c17.store(c29).end(c15).rtag('mergeable')\nc34 = c10.after(c31).index(UOp.const(0, dtypes.int)).load()\nc36 = c1.index((c3+c6)).store(c34).end(c4, c3)\nast = c36.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "move gates from index",
+   "kernel": 0,
+   "nodes": 38,
+   "changed": false,
+   "ms": 4.762
+  },
+  {
+   "stage": "codegen",
+   "name": "final rewrite",
+   "kernel": 0,
+   "nodes": 37,
+   "changed": true,
+   "ms": 1.972,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(1024, 'gidx0', dtype=dtypes.int)\nc4 = UOp.special(1024, 'gidx1', dtype=dtypes.int)\nc6 = c4<<UOp.const(10, dtypes.int)\nc10 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.int),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc13 = UOp.const(0.0, dtypes.float)\nc15 = UOp.range(1024, 0, AxisType.REDUCE, dtype=dtypes.int)\nc17 = c10.after(c10.index(UOp.const(0, dtypes.int)).store(c13), c15).index(UOp.const(0, dtypes.int))\nc18 = c17.load()\nc19 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc22 = c19.index((c6+c15)).load()\nc23 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(2, dtypes.float, device='CUDA'))\nc27 = c23.index((c3+(c15<<UOp.const(10, dtypes.int)))).load()\nc29 = c18+c22*c27\nc31 = c17.store(c29).end(c15)\nc34 = c10.after(c31).index(UOp.const(0, dtypes.int)).load()\nc35 = c1.index((c3+c6)).store(c34)\nast = c35.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 18,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "casted consts",
+   "kernel": 0,
+   "nodes": 43,
+   "changed": true,
+   "ms": 0.674,
+   "ir": {
+    "text": "c1 = UOp.const(1048576, dtypes.weakint).cast(dtypes.int)\nc2 = UOp(Ops.PARAM, dtypes.float, (c1,), ParamArg(0, dtypes.float, device='CUDA'))\nc4 = UOp.const(1024, dtypes.weakint).cast(dtypes.int)\nc5 = UOp(Ops.SPECIAL, dtypes.int, (c4,), 'gidx0')\nc6 = UOp(Ops.SPECIAL, dtypes.int, (c4,), 'gidx1')\nc8 = UOp.const(10, dtypes.weakint).cast(dtypes.int)\nc9 = c6<<c8\nc14 = UOp(Ops.BUFFER, dtypes.float, (UOp.const(1, dtypes.weakint).cast(dtypes.int),), ParamArg(0, dtypes.float, addrspace=AddrSpace.REG))\nc16 = UOp.const(0, dtypes.weakint).cast(dtypes.int)\nc19 = UOp.const(0.0, dtypes.weakfloat).cast(dtypes.float)\nc21 = UOp(Ops.RANGE, dtypes.int, (c4,), (0, AxisType.REDUCE))\nc23 = c14.after(c14.index(c16).store(c19), c21).index(c16)\nc24 = c23.load()\nc25 = UOp(Ops.PARAM, dtypes.float, (c1,), ParamArg(1, dtypes.float, device='CUDA'))\nc28 = c25.index((c9+c21)).load()\nc29 = UOp(Ops.PARAM, dtypes.float, (c1,), ParamArg(2, dtypes.float, device='CUDA'))\nc33 = c29.index((c5+(c21<<c8))).load()\nc35 = c24+c28*c33\nc37 = c23.store(c35).end(c21)\nc40 = c14.after(c37).index(c16).load()\nc41 = c2.index((c5+c9)).store(c40)\nast = c41.sink(arg=KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 22,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add implicit barriers",
+   "kernel": 0,
+   "nodes": 43,
+   "changed": false,
+   "ms": 1.801
+  },
+  {
+   "stage": "codegen",
+   "name": "add control flow",
+   "kernel": 0,
+   "nodes": 43,
+   "changed": false,
+   "ms": 0.423
+  },
+  {
+   "stage": "codegen",
+   "name": "number params with -1",
+   "kernel": 0,
+   "nodes": 43,
+   "changed": false,
+   "ms": 0.532
+  },
+  {
+   "stage": "codegen",
+   "name": "linearize/render",
+   "kernel": 0,
+   "nodes": 48,
+   "changed": true,
+   "ms": 71.545
+  },
+  {
+   "stage": "program",
+   "name": "optimize local size",
+   "kernel": 0,
+   "nodes": 53,
+   "changed": false,
+   "ms": 1.496
+  }
+ ],
+ "kernels": [
+  {
+   "ast": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 1, AxisType.WEAK)\nc4 = c3*UOp.const(1024, dtypes.weakint)\nc5 = UOp.range(1024, 2, AxisType.WEAK)\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc9 = UOp.range(1024, 0, AxisType.REDUCE)\nc12 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc16 = c8.index((c4+c9))*c12.index((c9*UOp.const(1024, dtypes.weakint)+c5))\nc17 = c16.reduce(c9, arg=(Ops.ADD, 0))\nc19 = c1.index((c4+c5)).store(c17).end(c3, c5)\nast = c19.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 11,
+    "clipped": false
+   },
+   "name": "r_1024_1024_1024",
+   "function_name": "r_1024_1024_1024",
+   "global_size": [
+    "1024",
+    "1024",
+    "1"
+   ],
+   "local_size": [
+    "1",
+    "1",
+    "1"
+   ],
+   "applied_opts": [],
+   "estimates": {
+    "ops": "2147483648",
+    "lds": "8594128896",
+    "mem": "12582912"
+   },
+   "uops": {
+    "text": "   0 Ops.CONST            dtypes.weakint                   []                           1048576\n   1 Ops.CAST             dtypes.int                       ['1048576']                  dtypes.int\n   2 Ops.PARAM            dtypes.float                     [1]                          ParamArg(0, dtypes.float, device='CUDA')\n   3 Ops.PARAM            dtypes.float                     [1]                          ParamArg(1, dtypes.float, device='CUDA')\n   4 Ops.PARAM            dtypes.float                     [1]                          ParamArg(2, dtypes.float, device='CUDA')\n   5 Ops.CONST            dtypes.weakint                   []                           1\n   6 Ops.CAST             dtypes.int                       ['1']                        dtypes.int\n   7 Ops.BUFFER           dtypes.float                     [6]                          ParamArg(0, dtypes.float, addrspace=AddrSpace.REG)\n   8 Ops.CONST            dtypes.weakint                   []                           1024\n   9 Ops.CAST             dtypes.int                       ['1024']                     dtypes.int\n  10 Ops.SPECIAL          dtypes.int                       [9]                          gidx0\n  11 Ops.SPECIAL          dtypes.int                       [9]                          gidx1\n  12 Ops.CONST            dtypes.weakint                   []                           0\n  13 Ops.CAST             dtypes.int                       ['0']                        dtypes.int\n  14 Ops.INDEX            dtypes.float                     [7, 13]                      None\n  15 Ops.CONST            dtypes.weakint                   []                           10\n  16 Ops.CAST             dtypes.int                       ['10']                       dtypes.int\n  17 Ops.CONST            dtypes.weakfloat                 []                           0.0\n  18 Ops.CAST             dtypes.float                     ['0.0']                      dtypes.float\n  19 Ops.SHL              dtypes.int                       [11, 16]                     None\n  20 Ops.STORE            dtypes.void                      [14, 18]                     None\n  21 Ops.RANGE            dtypes.int                       [9]                          (0, AxisType.REDUCE)\n  22 Ops.ADD              dtypes.int                       [19, 21]                     None\n  23 Ops.INDEX            dtypes.float                     [3, 22]                      None\n  24 Ops.LOAD             dtypes.float                     [23]                         None\n  25 Ops.SHL              dtypes.int                       [21, 16]                     None\n  26 Ops.ADD              dtypes.int                       [10, 25]                     None\n  27 Ops.INDEX            dtypes.float                     [4, 26]                      None\n  28 Ops.LOAD             dtypes.float                     [27]                         None\n  29 Ops.AFTER            dtypes.float                     [7, 20, 21]                  None\n  30 Ops.INDEX            dtypes.float                     [29, 13]                     None\n  31 Ops.LOAD             dtypes.float                     [30]                         None\n  32 Ops.MUL              dtypes.float                     [24, 28]                     None\n  33 Ops.ADD              dtypes.float                     [31, 32]                     None\n  34 Ops.STORE            dtypes.void                      [30, 33]                     None\n  35 Ops.END              dtypes.void                      [34, 21]                     None\n  36 Ops.AFTER            dtypes.float                     [7, 35]                      None\n  37 Ops.INDEX            dtypes.float                     [36, 13]                     None\n  38 Ops.LOAD             dtypes.float                     [37]                         None\n  39 Ops.ADD              dtypes.int                       [10, 19]                     None\n  40 Ops.INDEX            dtypes.float                     [2, 39]                      None\n  41 Ops.STORE            dtypes.void                      [40, 38]                     None\n  42 Ops.SINK             dtypes.void                      [41]                         KernelInfo(name='r\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m1024\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[31m1024\\x1b",
+    "lines": 43,
+    "clipped": false
+   },
+   "source": "typedef unsigned int uint;\n#define INFINITY (__int_as_float(0x7f800000))\n#define NAN (__int_as_float(0x7fffffff))\ntemplate <class T, class F> __device__ __forceinline__ T tg_bitcast(F v) { union U { F f; T t; }; U u; u.f = v; return u.t; }\nextern \"C\" __global__ void __launch_bounds__(1) r_1024_1024_1024(float* data0_1048576, float* data1_1048576, float* data2_1048576) {\n  float buf0[1];\n  int gidx0 = blockIdx.x; /* 1024 */\n  int gidx1 = blockIdx.y; /* 1024 */\n  int alu0 = (gidx1<<10);\n  *(buf0+0) = 0.0f;\n  for (int Ridx0 = 0; Ridx0 < 1024; Ridx0++) {\n    float val0 = (*(data1_1048576+(alu0+Ridx0)));\n    float val1 = (*(data2_1048576+(gidx0+(Ridx0<<10))));\n    *(buf0+0) = ((*(buf0+0))+(val0*val1));\n  }\n  *(data0_1048576+(gidx0+alu0)) = (*(buf0+0));\n}",
+   "time_us": 37240.0,
+   "ptx": {
+    "text": "//\n// Generated by NVIDIA NVVM Compiler\n//\n// Compiler Build ID: CL-36424714\n// Cuda compilation tools, release 13.0, V13.0.88\n// Based on NVVM 7.0.1\n//\n\n.version 9.0\n.target sm_89\n.address_size 64\n\n\t// .globl\tr_1024_1024_1024\n\n.visible .entry r_1024_1024_1024(\n\t.param .u64 r_1024_1024_1024_param_0,\n\t.param .u64 r_1024_1024_1024_param_1,\n\t.param .u64 r_1024_1024_1024_param_2\n)\n.maxntid 1, 1, 1\n{\n\t.reg .pred \t%p<2>;\n\t.reg .f32 \t%f<52>;\n\t.reg .b32 \t%r<9>;\n\t.reg .b64 \t%rd<19>;\n\n\n\tld.param.u64 \t%rd9, [r_1024_1024_1024_param_0];\n\tld.param.u64 \t%rd10, [r_1024_1024_1024_param_1];\n\tld.param.u64 \t%rd11, [r_1024_1024_1024_param_2];\n\tcvta.to.global.u64 \t%rd18, %rd11;\n\tcvta.to.global.u64 \t%rd17, %rd10;\n\tmov.u32 \t%r6, %ctaid.y;\n\tshl.b32 \t%r1, %r6, 10;\n\tmov.u32 \t%r2, %ctaid.x;\n\tmul.wide.s32 \t%rd3, %r2, 4;\n\tmul.wide.s32 \t%rd4, %r1, 4;\n\tmov.f32 \t%f51, 0f00000000;\n\tmov.u32 \t%r8, 0;\n\n$L__BB0_1:\n\tadd.s64 \t%rd12, %rd17, %rd4;\n\tadd.s64 \t%rd13, %rd18, %rd3;\n\tld.global.f32 \t%f4, [%rd13];\n\tld.global.f32 \t%f5, [%rd12];\n\tfma.rn.f32 \t%f6, %f5, %f4, %f51;\n\tld.global.f32 \t%f7, [%rd13+4096];\n\tld.global.f32 \t%f8, [%rd12+4];\n\tfma.rn.f32 \t%f9, %f8, %f7, %f6;\n\tld.global.f32 \t%f10, [%rd13+8192];\n\tld.global.f32 \t%f11, [%rd12+8];\n\tfma.rn.f32 \t%f12, %f11, %f10, %f9;\n\tld.global.f32 \t%f13, [%rd13+12288];\n\tld.global.f32 \t%f14, [%rd12+12];\n\tfma.rn.f32 \t%f15, %f14, %f13, %f12;\n\tld.global.f32 \t%f16, [%rd13+16384];\n\tld.global.f32 \t%f17, [%rd12+16];\n\tfma.rn.f32 \t%f18, %f17, %f16, %f15;\n\tld.global.f32 \t%f19, [%rd13+20480];\n\tld.global.f32 \t%f20, [%rd12+20];\n\tfma.rn.f32 \t%f21, %f20, %f19, %f18;\n\tld.global.f32 \t%f22, [%rd13+24576];\n\tld.global.f32 \t%f23, [%rd12+24];\n\tfma.rn.f32 \t%f24, %f23, %f22, %f21;\n\tld.global.f32 \t%f25, [%rd13+28672];\n\tld.global.f32 \t%f26, [%rd12+28];\n\tfma.rn.f32 \t%f27, %f26, %f25, %f24;\n\tld.global.f32 \t%f28, [%rd13+32768];\n\tld.global.f32 \t%f29, [%rd12+32];\n\tfma.rn.f32 \t%f30, %f29, %f28, %f27;\n\tld.global.f32 \t%f31, [%rd13+36864];\n\tld.global.f32 \t%f32, [%rd12+36];\n\tfma.rn.f32 \t%f33, %f32, %f31, %f30;\n\tld.global.f32 \t%f34, [%rd13+40960];\n\tld.global.f32 \t%f35, [%rd12+40];\n\tfma.rn.f32 \t%f36, %f35, %f34, %f33;\n\tld.global.f32 \t%f37, [%rd13+45056];\n\tld.global.f32 \t%f38, [%rd12+44];\n\tfma.rn.f32 \t%f39, %f38, %f37, %f36;\n\tld.global.f32 \t%f40, [%rd13+49152];\n\tld.global.f32 \t%f41, [%rd12+48];\n\tfma.rn.f32 \t%f42, %f41, %f40, %f39;\n\tld.global.f32 \t%f43, [%rd13+53248];\n\tld.global.f32 \t%f44, [%rd12+52];\n\tfma.rn.f32 \t%f45, %f44, %f43, %f42;\n\tld.global.f32 \t%f46, [%rd13+57344];\n\tld.global.f32 \t%f47, [%rd12+56];\n\tfma.rn.f32 \t%f48, %f47, %f46, %f45;\n\tld.global.f32 \t%f49, [%rd13+61440];\n\tld.global.f32 \t%f50, [%rd12+60];\n\tfma.rn.f32 \t%f51, %f50, %f49, %f48;\n\tadd.s64 \t%rd18, %rd18, 65536;\n\tadd.s64 \t%rd17, %rd17, 64;\n\tadd.s32 \t%r8, %r8, 16;\n\tsetp.ne.s32 \t%p1, %r8, 1024;\n\t@%p1 bra \t$L__BB0_1;\n\n\tcvta.to.global.u64 \t%rd14, %rd9;\n\tadd.s32 \t%r7, %r1, %r2;\n\tmul.wide.s32 \t%rd15, %r7, 4;\n\tadd.s64 \t%rd16, %rd14, %rd15;\n\tst.global.f32 \t[%rd16], %f51;\n\tret;\n\n}\n",
+    "lines": 106,
+    "clipped": false
+   },
+   "ptxas_info": "ptxas info    : 0 bytes gmem\nptxas info    : Compiling entry function 'r_1024_1024_1024' for 'sm_89'\nptxas info    : Function properties for r_1024_1024_1024\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas info    : Used 47 registers, used 0 barriers, 376 bytes cmem[0]\nptxas info    : Compile time = 4.929 ms",
+   "sass": {
+    "text": "\n\tcode for sm_89\n\t.target\tsm_89\n\n\t\tFunction : r_1024_1024_1024\n\t.headerflags\t@\"EF_CUDA_SM89 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM89)\"\n        /*0000*/                   MOV R1, c[0x0][0x28] ;                 /* 0x00000a0000017a02 */\n                                                                          /* 0x000fe40000000f00 */\n        /*0010*/                   S2R R7, SR_CTAID.Y ;                   /* 0x0000000000077919 */\n                                                                          /* 0x000e220000002600 */\n        /*0020*/                   MOV R42, c[0x0][0x170] ;               /* 0x00005c00002a7a02 */\n                                                                          /* 0x000fe20000000f00 */\n        /*0030*/                   ULDC.64 UR4, c[0x0][0x118] ;           /* 0x0000460000047ab9 */\n                                                                          /* 0x000fe20000000a00 */\n        /*0040*/                   MOV R43, c[0x0][0x174] ;               /* 0x00005d00002b7a02 */\n                                                                          /* 0x000fe20000000f00 */\n        /*0050*/                   S2R R38, SR_CTAID.X ;                  /* 0x0000000000267919 */\n                                                                          /* 0x000e620000002500 */\n        /*0060*/                   MOV R40, c[0x0][0x168] ;               /* 0x00005a0000287a02 */\n                                                                          /* 0x000fe40000000f00 */\n        /*0070*/                   MOV R41, c[0x0][0x16c] ;               /* 0x00005b0000297a02 */\n                                                                          /* 0x000fe40000000f00 */\n        /*0080*/                   MOV R9, RZ ;                           /* 0x000000ff00097202 */\n                                                                          /* 0x000fe40000000f00 */\n        /*0090*/                   MOV R44, RZ ;                          /* 0x000000ff002c7202 */\n                                                                          /* 0x000fc40000000f00 */\n        /*00a0*/                   SHF.L.U32 R7, R7, 0xa, RZ ;            /* 0x0000000a07077819 */\n                                                                          /* 0x001fe400000006ff */\n        /*00b0*/                   MOV R2, R40 ;                          /* 0x0000002800027202 */\n                                                                          /* 0x000fe40000000f00 */\n        /*00c0*/                   MOV R3, R41 ;                          /* 0x0000002900037202 */\n                                                                          /* 0x000fe40000000f00 */\n        /*00d0*/                   MOV R4, R42 ;                          /* 0x0000002a00047202 */\n                                                                          /* 0x000fe40000000f00 */\n        /*00e0*/                   MOV R5, R43 ;                          /* 0x0000002b00057202 */\n                                                                          /* 0x000fe20000000f00 */\n        /*00f0*/                   IMAD.WIDE R2, R7, 0x4, R2 ;            /* 0x0000000407027825 */\n                                                                          /* 0x000fc800078e0202 */\n        /*0100*/                   IMAD.WIDE R4, R38, 0x4, R4 ;           /* 0x0000000426047825 */\n                                                                          /* 0x002fe200078e0204 */\n        /*0110*/                   LDG.E R6, [R2.64] ;                    /* 0x0000000402067981 */\n                                                                          /* 0x000ea8000c1e1900 */\n        /*0120*/                   LDG.E R0, [R4.64] ;                    /* 0x0000000404007981 */\n                                                                          /* 0x000ea8000c1e1900 */\n        /*0130*/                   LDG.E R8, [R2.64+0x4] ;                /* 0x0000040402087981 */\n                                                                          /* 0x000ee8000c1e1900 */\n        /*0140*/                   LDG.E R11, [R4.64+0x1000] ;            /* 0x00100004040b7981 */\n                                                                          /* 0x000ee8000c1e1900 */\n        /*0150*/                   LDG.E R13, [R4.64+0x2000] ;            /* 0x00200004040d7981 */\n                                                                          /* 0x000f28000c1e1900 */\n        /*0160*/                   LDG.E R10, [R2.64+0x8] ;               /* 0x00000804020a7981 */\n                                                                          /* 0x000f28000c1e1900 */\n        /*0170*/                   LDG.E R15, [R4.64+0x3000] ;            /* 0x00300004040f7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0180*/                   LDG.E R12, [R2.64+0xc] ;               /* 0x00000c04020c7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0190*/                   LDG.E R17, [R4.64+0x4000] ;            /* 0x0040000404117981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*01a0*/                   LDG.E R14, [R2.64+0x10] ;              /* 0x00001004020e7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*01b0*/                   LDG.E R19, [R4.64+0x5000] ;            /* 0x0050000404137981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*01c0*/                   LDG.E R16, [R2.64+0x14] ;              /* 0x0000140402107981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*01d0*/                   LDG.E R21, [R4.64+0x6000] ;            /* 0x0060000404157981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*01e0*/                   LDG.E R18, [R2.64+0x18] ;              /* 0x0000180402127981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*01f0*/                   LDG.E R23, [R4.64+0x7000] ;            /* 0x0070000404177981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0200*/                   LDG.E R20, [R2.64+0x1c] ;              /* 0x00001c0402147981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0210*/                   LDG.E R25, [R4.64+0x8000] ;            /* 0x0080000404197981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0220*/                   LDG.E R22, [R2.64+0x20] ;              /* 0x0000200402167981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0230*/                   LDG.E R27, [R4.64+0x9000] ;            /* 0x00900004041b7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0240*/                   LDG.E R24, [R2.64+0x24] ;              /* 0x0000240402187981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0250*/                   LDG.E R29, [R4.64+0xa000] ;            /* 0x00a00004041d7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0260*/                   LDG.E R26, [R2.64+0x28] ;              /* 0x00002804021a7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0270*/                   LDG.E R31, [R4.64+0xb000] ;            /* 0x00b00004041f7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0280*/                   LDG.E R28, [R2.64+0x2c] ;              /* 0x00002c04021c7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0290*/                   LDG.E R33, [R4.64+0xc000] ;            /* 0x00c0000404217981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*02a0*/                   LDG.E R30, [R2.64+0x30] ;              /* 0x00003004021e7981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*02b0*/                   LDG.E R35, [R4.64+0xd000] ;            /* 0x00d0000404237981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*02c0*/                   LDG.E R32, [R2.64+0x34] ;              /* 0x0000340402207981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*02d0*/                   LDG.E R37, [R4.64+0xe000] ;            /* 0x00e0000404257981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*02e0*/                   LDG.E R34, [R2.64+0x38] ;              /* 0x0000380402227981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*02f0*/                   LDG.E R39, [R4.64+0xf000] ;            /* 0x00f0000404277981 */\n                                                                          /* 0x000f68000c1e1900 */\n        /*0300*/                   LDG.E R36, [R2.64+0x3c] ;              /* 0x00003c0402247981 */\n                                                                          /* 0x000f62000c1e1900 */\n        /*0310*/                   IADD3 R44, R44, 0x10, RZ ;             /* 0x000000102c2c7810 */\n                                                                          /* 0x000fc40007ffe0ff */\n        /*0320*/                   IADD3 R42, P1, R42, 0x10000, RZ ;      /* 0x000100002a2a7810 */\n                                                                          /* 0x000fe40007f3e0ff */\n        /*0330*/                   ISETP.NE.AND P0, PT, R44, 0x400, PT ;  /* 0x000004002c00780c */\n                                                                          /* 0x000fe40003f05270 */\n        /*0340*/                   IADD3 R40, P2, R40, 0x40, RZ ;         /* 0x0000004028287810 */\n                                                                          /* 0x000fe40007f5e0ff */\n        /*0350*/                   IADD3.X R43, RZ, R43, RZ, P1, !PT ;    /* 0x0000002bff2b7210 */\n                                                                          /* 0x000fe40000ffe4ff */\n        /*0360*/                   IADD3.X R41, RZ, R41, RZ, P2, !PT ;    /* 0x00000029ff297210 */\n                                                                          /* 0x000fe200017fe4ff */\n        /*0370*/                   FFMA R0, R0, R6, R9 ;                  /* 0x0000000600007223 */\n                                                                          /* 0x004fc80000000009 */\n        /*0380*/                   FFMA R0, R11, R8, R0 ;                 /* 0x000000080b007223 */\n                                                                          /* 0x008fc80000000000 */\n        /*0390*/                   FFMA R0, R13, R10, R0 ;                /* 0x0000000a0d007223 */\n                                                                          /* 0x010fc80000000000 */\n        /*03a0*/                   FFMA R0, R15, R12, R0 ;                /* 0x0000000c0f007223 */\n                                                                          /* 0x020fc80000000000 */\n        /*03b0*/                   FFMA R0, R17, R14, R0 ;                /* 0x0000000e11007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*03c0*/                   FFMA R0, R19, R16, R0 ;                /* 0x0000001013007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*03d0*/                   FFMA R0, R21, R18, R0 ;                /* 0x0000001215007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*03e0*/                   FFMA R0, R23, R20, R0 ;                /* 0x0000001417007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*03f0*/                   FFMA R0, R25, R22, R0 ;                /* 0x0000001619007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0400*/                   FFMA R0, R27, R24, R0 ;                /* 0x000000181b007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0410*/                   FFMA R0, R29, R26, R0 ;                /* 0x0000001a1d007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0420*/                   FFMA R0, R31, R28, R0 ;                /* 0x0000001c1f007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0430*/                   FFMA R0, R33, R30, R0 ;                /* 0x0000001e21007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0440*/                   FFMA R0, R35, R32, R0 ;                /* 0x0000002023007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0450*/                   FFMA R0, R37, R34, R0 ;                /* 0x0000002225007223 */\n                                                                          /* 0x000fc80000000000 */\n        /*0460*/                   FFMA R9, R39, R36, R0 ;                /* 0x0000002427097223 */\n                                                                          /* 0x000fe20000000000 */\n        /*0470*/               @P0 BRA 0xb0 ;                             /* 0xfffffc3000000947 */\n                                                                          /* 0x000fea000383ffff */\n        /*0480*/                   IADD3 R2, R7, R38, RZ ;                /* 0x0000002607027210 */\n                                                                          /* 0x000fe40007ffe0ff */\n        /*0490*/                   MOV R3, 0x4 ;                          /* 0x0000000400037802 */\n                                                                          /* 0x000fca0000000f00 */\n        /*04a0*/                   IMAD.WIDE R2, R2, R3, c[0x0][0x160] ;  /* 0x0000580002027625 */\n                                                                          /* 0x000fca00078e0203 */\n        /*04b0*/                   STG.E [R2.64], R9 ;                    /* 0x0000000902007986 */\n                                                                          /* 0x000fe2000c101904 */\n        /*04c0*/                   EXIT ;                                 /* 0x000000000000794d */\n                                                                          /* 0x000fea0003800000 */\n        /*04d0*/                   BRA 0x4d0;                             /* 0xfffffff000007947 */\n                                                                          /* 0x000fc0000383ffff */\n        /*04e0*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*04f0*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0500*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0510*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0520*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0530*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0540*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0550*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0560*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n        /*0570*/                   NOP;                                   /* 0x0000000000007918 */\n                                                                          /* 0x000fc00000000000 */\n\t\t..........\n\n",
+    "lines": 185,
+    "clipped": false
+   }
+  }
+ ],
+ "check": {
+  "max_abs_err": 0.0002288818359375,
+  "max_abs_ref": 167.12191772460938,
+  "tol": 1.6712191772460938,
+  "ok": true,
+  "shape": [
+   1024,
+   1024
+  ],
+  "dtype": "float32"
+ },
+ "compile_and_run_s": 0.232,
+ "kernel_times_us": [
+  [
+   "r_1024_1024_1024",
+   37240.0
+  ]
+ ]
+}

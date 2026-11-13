@@ -1,0 +1,284 @@
+[
+ {
+  "example": "add",
+  "variant": "default",
+  "ok": true,
+  "line": "add/default: 1 kernels, 52 passes, check OK (err 0.00e+00), times [['E_8192_32_4', 21.57]]"
+ },
+ {
+  "example": "add",
+  "variant": "torch",
+  "ok": true,
+  "line": "add/torch: eager ['void at::native::vectorized_elementwise_'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "fused_chain",
+  "variant": "default",
+  "ok": true,
+  "line": "fused_chain/default: 1 kernels, 54 passes, check OK (err 1.91e-06), times [['E_8192_32_4', 24.54]]"
+ },
+ {
+  "example": "fused_chain",
+  "variant": "torch",
+  "ok": true,
+  "line": "fused_chain/torch: eager ['void at::native::vectorized_elementwise_', 'void at::native::vectorized_elementwise_', 'void at::native::vectorized_elementwise_', 'void at::native::vectorized_elementwise_'], inductor 1 launches, 2 triton kernels, err 1.91e-06, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "gelu",
+  "variant": "default",
+  "ok": true,
+  "line": "gelu/default: 1 kernels, 54 passes, check OK (err 4.77e-07), times [['E_8192_32_4', 22.53]]"
+ },
+ {
+  "example": "gelu",
+  "variant": "torch",
+  "ok": true,
+  "line": "gelu/torch: eager ['void at::native::vectorized_elementwise_'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "transpose",
+  "variant": "default",
+  "ok": true,
+  "line": "transpose/default: 1 kernels, 54 passes, check OK (err 0.00e+00), times [['E_128_16_8_16_4', 23.55]]"
+ },
+ {
+  "example": "transpose",
+  "variant": "torch",
+  "ok": true,
+  "line": "transpose/torch: eager ['void at::native::elementwise_kernel<128,'], inductor 1 launches, 1 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "broadcast_add",
+  "variant": "default",
+  "ok": true,
+  "line": "broadcast_add/default: 1 kernels, 77 passes, check OK (err 0.00e+00), times [['E_8_64_32_4_4_4', 32.77]]"
+ },
+ {
+  "example": "broadcast_add",
+  "variant": "torch",
+  "ok": true,
+  "line": "broadcast_add/torch: eager ['void at::native::elementwise_kernel<128,'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "pad_slice",
+  "variant": "default",
+  "ok": true,
+  "line": "pad_slice/default: 1 kernels, 63 passes, check OK (err 0.00e+00), times [['E_251_337_2', 67.58]]"
+ },
+ {
+  "example": "pad_slice",
+  "variant": "torch",
+  "ok": true,
+  "line": "pad_slice/torch: eager ['void at::native::vectorized_elementwise_', 'void at::native::elementwise_kernel<128,'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "permute4d",
+  "variant": "default",
+  "ok": true,
+  "line": "permute4d/default: 1 kernels, 54 passes, check OK (err 0.00e+00), times [['E_32_32_2_16_8_4', 22.53]]"
+ },
+ {
+  "example": "permute4d",
+  "variant": "torch",
+  "ok": true,
+  "line": "permute4d/torch: eager ['void at::native::elementwise_kernel<128,'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "sum_rows",
+  "variant": "default",
+  "ok": true,
+  "line": "sum_rows/default: 1 kernels, 54 passes, check OK (err 2.29e-05), times [['r_1024_16_64', 25.6]]"
+ },
+ {
+  "example": "sum_rows",
+  "variant": "torch",
+  "ok": true,
+  "line": "sum_rows/torch: eager ['void at::native::reduce_kernel<512, 1, a'], inductor 1 launches, 1 triton kernels, err 1.53e-05, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "max_cols",
+  "variant": "default",
+  "ok": true,
+  "line": "max_cols/default: 1 kernels, 54 passes, check OK (err 0.00e+00), times [['r_1024_16_64', 33.79]]"
+ },
+ {
+  "example": "max_cols",
+  "variant": "torch",
+  "ok": true,
+  "line": "max_cols/torch: eager ['Memset (Device)', 'void at::native::reduce_kernel<128, 4, a'], inductor 2 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "sum_all",
+  "variant": "default",
+  "ok": true,
+  "line": "sum_all/default: 3 kernels, 148 passes, check OK (err 4.23e-03), times [['r_32_32_4_1024_4', 471.97], ['r_256_16', 19.46], ['r_16_16', 14.34]]"
+ },
+ {
+  "example": "sum_all",
+  "variant": "torch",
+  "ok": true,
+  "line": "sum_all/torch: eager ['Memset (Device)', 'void at::native::reduce_kernel<512, 1, a'], inductor 2 launches, 2 triton kernels, err 1.22e-04, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "softmax",
+  "variant": "default",
+  "ok": true,
+  "line": "softmax/default: 3 kernels, 117 passes, check OK (err 7.45e-09), times [['r_1024_16_64', 25.6], ['r_1024_16_64', 24.58], ['E_128_16_8_16_4', 17.41]]"
+ },
+ {
+  "example": "softmax",
+  "variant": "torch",
+  "ok": true,
+  "line": "softmax/torch: eager ['void (anonymous namespace)::softmax_warp'], inductor 1 launches, 1 triton kernels, err 5.59e-09, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "layernorm",
+  "variant": "default",
+  "ok": true,
+  "line": "layernorm/default: 3 kernels, 117 passes, check OK (err 7.15e-07), times [['r_1024_16_64', 27.65], ['r_1024_16_64', 24.58], ['E_128_16_8_16_4', 18.43]]"
+ },
+ {
+  "example": "layernorm",
+  "variant": "torch",
+  "ok": true,
+  "line": "layernorm/torch: eager ['void at::native::(anonymous namespace)::'], inductor 1 launches, 1 triton kernels, err 9.54e-07, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "matmul",
+  "variant": "default",
+  "ok": true,
+  "line": "matmul/default: 1 kernels, 170 passes, check OK (err 2.29e-04), times [['r_32_16_8_16_4_4_256_4', 686.08]]"
+ },
+ {
+  "example": "matmul",
+  "variant": "noopt",
+  "ok": true,
+  "line": "matmul/noopt: 1 kernels, 54 passes, check OK (err 2.29e-04), times [['r_1024_1024_1024', 37240.0]]"
+ },
+ {
+  "example": "matmul",
+  "variant": "beam2",
+  "ok": false,
+  "line": "(no output)"
+ },
+ {
+  "example": "matmul",
+  "variant": "torch",
+  "ok": true,
+  "line": "matmul/torch: eager ['Memset (Device)', 'ampere_sgemm_128x64_nn'], inductor 2 launches, 0 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "matmul_fp16",
+  "variant": "default",
+  "ok": true,
+  "line": "matmul_fp16/default: 1 kernels, 466 passes, check OK (err 1.25e-03), times [['r_32_16_32_4_2_2_4_4_128_2', 527.36]]"
+ },
+ {
+  "example": "matmul_fp16",
+  "variant": "no_tc",
+  "ok": true,
+  "line": "matmul_fp16/no_tc: 1 kernels, 170 passes, check OK (err 4.75e-02), times [['r_64_32_8_16_4_4_512_4', 2841.6]]"
+ },
+ {
+  "example": "matmul_fp16",
+  "variant": "torch",
+  "ok": true,
+  "line": "matmul_fp16/torch: eager ['Memset (Device)', 'ampere_fp16_s1688gemm_fp16_128x128_ldg8_', 'void at::native::unrolled_elementwise_ke'], inductor 3 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "exp",
+  "variant": "default",
+  "ok": true,
+  "line": "exp/default: 1 kernels, 52 passes, check OK (err 1.53e-05), times [['E_8192_32_4', 24.58]]"
+ },
+ {
+  "example": "exp",
+  "variant": "transcendental2",
+  "ok": true,
+  "line": "exp/transcendental2: 1 kernels, 52 passes, check OK (err 1.53e-05), times [['E_8192_32_4', 23.55]]"
+ },
+ {
+  "example": "exp",
+  "variant": "torch",
+  "ok": true,
+  "line": "exp/torch: eager ['void at::native::vectorized_elementwise_'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "sin",
+  "variant": "default",
+  "ok": true,
+  "line": "sin/default: 1 kernels, 52 passes, check OK (err 5.96e-08), times [['E_8192_32_4', 23.55]]"
+ },
+ {
+  "example": "sin",
+  "variant": "transcendental2",
+  "ok": true,
+  "line": "sin/transcendental2: 1 kernels, 52 passes, check OK (err 1.19e-07), times [['E_8192_32_4', 69.63]]"
+ },
+ {
+  "example": "sin",
+  "variant": "torch",
+  "ok": true,
+  "line": "sin/torch: eager ['void at::native::vectorized_elementwise_'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "int_divmod",
+  "variant": "default",
+  "ok": true,
+  "line": "int_divmod/default: 1 kernels, 54 passes, check OK (err 0.00e+00), times [['E_8192_32_4', 22.53]]"
+ },
+ {
+  "example": "int_divmod",
+  "variant": "torch",
+  "ok": true,
+  "line": "int_divmod/torch: eager ['void at::native::vectorized_elementwise_', 'void at::native::vectorized_elementwise_', 'void at::native::vectorized_elementwise_'], inductor 1 launches, 2 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ },
+ {
+  "example": "add_ptx",
+  "variant": "cuda",
+  "ok": true,
+  "line": "add_ptx/cuda: 1 kernels, 52 passes, check OK (err 0.00e+00), times [['E_8192_32_4', 22.46]]"
+ },
+ {
+  "example": "add_ptx",
+  "variant": "ptx",
+  "ok": true,
+  "line": "add_ptx/ptx: 1 kernels, 52 passes, check OK (err 0.00e+00), times [['E_8192_32_4', 22.53]]"
+ },
+ {
+  "example": "sum_rows_ptx",
+  "variant": "cuda",
+  "ok": true,
+  "line": "sum_rows_ptx/cuda: 1 kernels, 54 passes, check OK (err 2.29e-05), times [['r_1024_16_64', 25.54]]"
+ },
+ {
+  "example": "sum_rows_ptx",
+  "variant": "ptx",
+  "ok": true,
+  "line": "sum_rows_ptx/ptx: 1 kernels, 54 passes, check OK (err 2.29e-05), times [['r_1024_16_64', 27.65]]"
+ },
+ {
+  "example": "matmul_ptx",
+  "variant": "cuda",
+  "ok": true,
+  "line": "matmul_ptx/cuda: 1 kernels, 170 passes, check OK (err 2.29e-04), times [['r_32_16_8_16_4_4_256_4', 684.03]]"
+ },
+ {
+  "example": "matmul_ptx",
+  "variant": "ptx",
+  "ok": true,
+  "line": "matmul_ptx/ptx: 1 kernels, 170 passes, check OK (err 1.53e-04), times [['r_32_16_8_16_4_4_256_4', 690.18]]"
+ },
+ {
+  "example": "mlp_backward",
+  "variant": "default",
+  "ok": true,
+  "line": "mlp_backward/default: 2 kernels, 204 passes, check OK (err 0.00e+00), times [['r_8_4_8_16_4_4_128_4', 70.66], ['r_8_8_8_16_4_4_64_4', 37.89]]"
+ },
+ {
+  "example": "mlp_backward",
+  "variant": "torch",
+  "ok": true,
+  "line": "mlp_backward/torch: eager ['void cutlass::Kernel2<cutlass_80_simt_sg', 'void cublasLt::splitKreduce_kernel<32, 1', 'void at::native::vectorized_elementwise_', 'void at::native::reduce_kernel<512, 1, a', 'void at::native::vectorized_elementwise_', 'void at::native::elementwise_kernel<128,', 'ampere_sgemm_32x32_sliced1x4_nt'], inductor 7 launches, 4 triton kernels, err 0.00e+00, debug files ['fx_graph', 'ir_pre_fusion', 'ir_post_fusion', 'output_code']"
+ }
+]

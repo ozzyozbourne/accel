@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>6. The optimizer: opts, heuristics, BEAM · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+.muted { color: var(--muted); }
+.nm { font-family: var(--mono); font-size: 15px; } .nm i { color: #4b5563; font-style: normal; } .nm b { font-weight: 600; }
+.ov-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.ov-o { cursor: pointer; font-family: var(--mono); font-size: 12px; opacity: .55; }
+.ov-o.done { opacity: .9; } .ov-o.now { opacity: 1; outline: 2px solid var(--accent); }
+.ov-bar { display: flex; gap: 3px; align-items: stretch; height: 64px; margin: 6px 0 2px; position: relative; padding-bottom: 16px; }
+.ov-ax { border-radius: 6px; color: #0b1220; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 34px; overflow: hidden; transition: flex .6s ease, background .6s; line-height: 1.15; }
+.ov-ax b { font-family: var(--mono); font-size: 13px; } .ov-ax span { font-family: var(--mono); font-size: 14px; font-weight: 700; } .ov-ax em { font-size: 10px; font-style: normal; opacity: .75; }
+.ov-tot { position: absolute; bottom: -2px; right: 0; font-size: 11px; color: var(--muted); }
+.ov-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; margin-top: 10px; }
+.ov-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 8px 0 4px; }
+.ov-form div { margin: 2px 0; font-size: 13px; }
+.ov-t { margin: 0; font-size: 13px; } .ov-t td { padding: 3px 8px; } .ov-t td:last-child { font-family: var(--mono); }
+.ov-msg { margin-top: 12px; padding: 10px 12px; background: var(--panel2); border-radius: 8px; font-size: 14px; min-height: 48px; }
+.ov-check { margin-top: 8px; } .ov-check .chip { font-family: var(--mono); font-size: 12px; white-space: normal; }
+.chip.bad { background: #7f1d1d; color: #fecaca; }
+table.nd td, table.nd th { vertical-align: middle; }
+.axchip { display: inline-block; border: 1px solid; border-radius: 6px; padding: 0 6px; margin: 2px; font-family: var(--mono); font-size: 12px; }
+.axchip em { color: var(--muted); font-style: normal; font-size: 11px; }
+.bm-body { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+.bm-body canvas { image-rendering: pixelated; border: 1px solid var(--line); max-width: 100%; cursor: crosshair; }
+.bm-info { flex: 1; min-width: 240px; font-size: 14px; } .bm-info div { margin-bottom: 8px; }
+.rt-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.rt-body svg { flex: 1.4; min-width: 320px; width: 100%; }
+.rt-info { flex: 1; min-width: 230px; font-size: 14px; }
+.rt-n { display: inline-block; background: var(--panel2); border-radius: 8px; padding: 4px 10px; margin: 0 6px 6px 0; }
+.rt-n span { display: block; font-size: 11px; color: var(--muted); } .rt-n b { font-family: var(--mono); font-size: 18px; }
+.rt-l { fill: var(--muted); font-size: 12px; }
+.rt-a { fill: #3b2f63; stroke: #6d5bd0; } .rt-b { fill: #1e3a5f; stroke: #3b82f6; }
+.rt-a.used, .rt-b.used { opacity: .35; } .rt-a.hot { fill: #c084fc; } .rt-b.hot { fill: #60a5fa; }
+.rt-c { stroke: #34d399; stroke-opacity: .4; } .rt-now { fill: none; stroke: #fff; stroke-width: 2; }
+.rt-ln { stroke: #fff; stroke-opacity: .45; stroke-dasharray: 3 3; }
+#beam-tree svg { width: 100%; }
+.bt-l { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+.bt-n circle { fill: #334155; } .bt-n.win circle { fill: var(--s-codegen); } .bt-n text { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+.bt-e { stroke: #334155; stroke-width: 1; opacity: 0; } .bt-w { stroke: var(--s-codegen); stroke-width: 3; opacity: 0; }
+.bt-o { fill: var(--s-codegen); font-family: var(--mono); font-size: 11px; text-anchor: middle; opacity: 0; }
+#beam-tree.go .bt-e { animation: btfade .5s forwards; } #beam-tree.go .bt-w, #beam-tree.go .bt-o { animation: btfade .5s forwards; }
+@keyframes btfade { to { opacity: 1; } }
+#beam-tree .bt-n.cand circle { opacity: 0; } #beam-tree.go .bt-n.cand circle { animation: btfade .8s .2s forwards; }
+</style></head>
+<body><main>
+<div class="kicker">Chapter 6</div><h1>The optimizer: opts, heuristics, BEAM</h1>
+<p class="lede">The same one-line matmul, <code>a @ b</code> on two 1024×1024 fp32 matrices, ran in 37.24 ms, 686 µs or 224 µs on the L4 depending on one environment variable. Nothing upstream changed: the schedule, the AST and the fusion decisions are identical. What changed is a short list of <em>opts</em> that tinygrad applied to the kernel's loop nest. This chapter takes that list apart: what each OptOp does to the axes, how the kernel name encodes the result, how the hand-coded heuristic picks its opts, what BEAM search does instead, and why a 4×4 or 16×4 register tile is worth a 54–166× speedup.</p>
+<div class="pipeline" data-active="codegen"></div>
+
+<h2>Three kernels for one line of Python</h2>
+<p>The harness ran <code>a @ b</code> three ways (see <code>harness/examples.py</code>): with no environment variables, with <code>NOOPT=1</code>, and with <code>BEAM=2</code>. Each produced exactly one kernel. PyTorch, for comparison, called cuBLAS.</p>
+<div class="bars" data-keys="matmul/noopt,matmul/default,matmul/beam2,matmul/torch:eager" data-labels="NOOPT=1  r_1024_1024_1024|default  r_32_16_8_16_4_4_256_4|BEAM=2  r_16_8_16_8_4_4_4_256_4|PyTorch eager (cuBLAS)"></div>
+<table>
+<tr><th>variant</th><th>kernel</th><th>grid (blocks)</th><th>block (threads)</th><th>registers</th><th>time on L4</th></tr>
+<tr><td><code>NOOPT=1</code></td><td><code>r_1024_1024_1024</code></td><td>1024 × 1024</td><td>1</td><td>47</td><td>37.24 ms</td></tr>
+<tr><td>default (heuristic)</td><td><code>r_32_16_8_16_4_4_256_4</code></td><td>16 × 32</td><td>8 × 16 = 128</td><td>56</td><td>686.08 µs</td></tr>
+<tr><td><code>BEAM=2</code></td><td><code>r_16_8_16_8_4_4_4_256_4</code></td><td>8 × 16</td><td>16 × 8 = 128</td><td>128</td><td>224.26 µs</td></tr>
+<tr><td>PyTorch eager / Inductor</td><td><code>ampere_sgemm_128x64_nn</code></td><td colspan="3">cuBLAS (not captured)</td><td>149.18 µs</td></tr>
+</table>
+<p>All three tinygrad kernels match numpy to 2.3·10⁻⁴ (the <code>check</code> field). They compute the same 2·1024³ ≈ 2.15 GFLOP. They differ only in how that work is spread over blocks, threads and registers. The torch capture also includes a 0.42 µs <code>Memset (Device)</code>, which the bar adds to cuBLAS's 149.18 µs. Under <code>torch.compile</code>, Inductor does not generate a Triton kernel for this. Its output code calls <code>extern_kernels.mm</code>, which ends up in the same cuBLAS kernel at the same 149.18 µs.</p>
+
+<h2>The vocabulary: axes, AxisType and kernel names</h2>
+<p>By the time the optimizer runs, a kernel is a SINK whose loops are <code>RANGE</code> UOps (see chapter 2). For the matmul there are three: two output loops <code>i</code>, <code>j</code> and one reduce loop <code>k</code>. You can see them in the kernel AST as <code>UOp.range(1024, 1, AxisType.WEAK)</code>, <code>UOp.range(1024, 2, AxisType.WEAK)</code> and <code>UOp.range(1024, 0, AxisType.REDUCE)</code>. The second argument is the range's id and the third is its <strong>AxisType</strong>.</p>
+<div class="kernel-view" data-key="matmul/default" data-tabs="ast,source" data-tab="ast" data-highlight="range\("></div>
+<p><code>AxisType</code> is defined in <a class="src" data-src="tinygrad/uop/ops.py#L17"></a>. The letters and colours tinygrad uses to print each type are at <a class="src" data-src="tinygrad/uop/ops.py#L38"></a>–<a class="src" data-src="tinygrad/uop/ops.py#L42"></a>. The sort position that orders axes is <code>axis_to_pos</code> at <a class="src" data-src="tinygrad/uop/ops.py#L45"></a>. The types a CUDA matmul uses:</p>
+<table>
+<tr><th>AxisType</th><th>letter</th><th>colour</th><th>position</th><th>what it becomes in CUDA</th></tr>
+<tr><td>WEAK</td><td>L</td><td>white</td><td>−1</td><td>an output loop that has not been assigned yet. On a GPU, <code>convert_loop_to_global</code> turns it into GLOBAL</td></tr>
+<tr><td>GLOBAL</td><td>g</td><td><span style="color:#60a5fa">blue</span></td><td>0</td><td>a <code>blockIdx</code> dimension (<code>gidx</code>)</td></tr>
+<tr><td>WARP</td><td>w</td><td><span style="color:#a5f3fc">bright cyan</span></td><td>1</td><td>the 32 lanes of a tensor-core warp (chapter 7)</td></tr>
+<tr><td>LOCAL</td><td>l</td><td><span style="color:#22d3ee">cyan</span></td><td>2</td><td>a <code>threadIdx</code> dimension (<code>lidx</code>)</td></tr>
+<tr><td>GROUP_REDUCE</td><td>G</td><td><span style="color:#fb7185">bright red</span></td><td>2</td><td>threads that split a reduction and combine it through shared memory (chapter 5)</td></tr>
+<tr><td>UPCAST</td><td>u</td><td><span style="color:#facc15">yellow</span></td><td>3</td><td>no loop, no thread index: N separate values in registers</td></tr>
+<tr><td>REDUCE</td><td>R</td><td><span style="color:#f87171">red</span></td><td>4</td><td>the <code>for (Ridx0 …)</code> loop</td></tr>
+<tr><td>UNROLL</td><td>r</td><td><span style="color:#e879f9">magenta</span></td><td>5</td><td>part of the reduce loop written out in straight-line code</td></tr>
+</table>
+<p>The <code>Scheduler</code> (the optimizer's view of a kernel) lists the ranges sorted by <code>(axis_to_pos, id)</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L21"></a>). Two things depend on that order. Opt axis numbers count positions in it, and the kernel name is built from it (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L50"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L58"></a>). The name is <code>r</code> if the kernel has a REDUCE (<code>E</code> if it doesn't), followed by every axis size in that order, each printed in its type's colour. With colours off you only see the digits, so the order is what you have to remember: <span style="color:#60a5fa">globals</span>, warp, <span style="color:#22d3ee">locals</span>, <span style="color:#facc15">upcasts</span>, <span style="color:#f87171">reduce</span>, <span style="color:#e879f9">unroll</span>.</p>
+<div id="name-decode" class="reveal" data-keys="matmul/noopt,matmul/default,matmul/beam2"></div>
+<p>So <code>r_32_16_8_16_4_4_256_4</code> reads: 32·16 = 512 blocks, 8·16 = 128 threads per block, a 4×4 tile of outputs per thread (512·128·16 = 1024² outputs), and a reduce loop of 256 iterations that each do 4 values of k (256·4 = 1024). The decoder above is computed by replaying each capture's <code>applied_opts</code>, the same way the next widget does, and checking that the result equals the captured name.</p>
+
+<h2>OptOps: the moves</h2>
+<p>An opt is a frozen dataclass <code>Opt(op, axis, arg)</code> (<a class="src" data-src="tinygrad/codegen/opt/__init__.py#L11"></a>). There are ten ops (<a class="src" data-src="tinygrad/codegen/opt/__init__.py#L6"></a>). <code>Scheduler.apply_opt</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L121"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L212"></a>) turns each one into a rewrite of the AST. Six of them map to an AxisType through <code>opt_to_at</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L133"></a>) and are implemented by a single primitive, <code>shift_to</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L90"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L97"></a>):</p>
+<pre class="code static" data-lang="python">
+def shift_to(self, rng, amount, new_type, top=False, input_new_rng=None):
+  if (old_sz:=rng.src[0].divides(amount)) is None: raise KernelOptError(...)
+  new_rng = UOp.range(amount, next(self.opt_range), new_type)        # a fresh range id
+  replaced_rng = rng.replace(src=(old_sz,))                          # same id, smaller size
+  sub_axis = (new_rng * old_sz + replaced_rng) if top else (replaced_rng * amount + new_rng)
+  self.ast = self.ast.substitute({rng:sub_axis})
+</pre>
+<p>Every split replaces a range <code>r</code> of size N with <code>r'·amount + new</code>, where <code>r'</code> has size N/amount. The new sub-axis is the <em>inner</em>, stride-1 part of the old index, unless <code>top=True</code>, which makes it the outer part. Because the AST is rewritten, every INDEX that used <code>r</code> now uses the two-term expression, and later passes such as the expander and gpudims see two ranges instead of one. Opt order matters: the second split of an axis splits what the first one left over (<code>r'</code>), so the first opt applied to an axis owns its fastest-varying bits.</p>
+<table>
+<tr><th>OptOp</th><th>what it does</th><th>checks in <code>apply_opt</code></th></tr>
+<tr><td><code>UPCAST</code></td><td>split off <code>arg</code> values of a GLOBAL/LOCAL axis into UPCAST: one thread computes <code>arg</code> outputs in registers</td><td>arg ≤ 16, only GLOBAL/LOCAL/WEAK (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L157"></a>)</td></tr>
+<tr><td><code>UNROLL</code></td><td>split off <code>arg</code> steps of a reduce axis into UNROLL: the loop body handles <code>arg</code> values of k. The axis number counts reduce axes only (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L115"></a>)</td><td>arg ≤ 32, only REDUCE/GROUP_REDUCE (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L154"></a>)</td></tr>
+<tr><td><code>LOCAL</code></td><td>split off <code>arg</code> of a GLOBAL axis into LOCAL: those become threads of one block</td><td>only GLOBAL/WEAK, not with NOLOCALS (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L160"></a>)</td></tr>
+<tr><td><code>GROUP</code> / <code>GROUPTOP</code></td><td>split a REDUCE axis into GROUP_REDUCE (threads that cooperate on one reduction through shared memory). GROUPTOP uses <code>top=True</code>. The axis counts reduce axes</td><td>REDUCE only, no TC, shared memory ≤ <code>shared_max</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L143"></a>, <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L168"></a>)</td></tr>
+<tr><td><code>THREAD</code></td><td>split a WEAK axis over CPU threads (<code>top=True</code>)</td><td>only renderers with <code>has_threads</code>, i.e. CPU (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L163"></a>)</td></tr>
+<tr><td><code>TC</code></td><td>rebuild the reduce as a tensor-core WMMA (chapter 7)</td><td>must be the first opt (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L174"></a>)</td></tr>
+<tr><td><code>PADTO</code></td><td>round an axis up to a multiple of <code>arg</code> and mask the extra iterations</td><td>at most 4× the work, not on upcast/unroll axes (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L183"></a>)</td></tr>
+<tr><td><code>SWAP</code></td><td>exchange the range ids of two GLOBAL axes, which reorders them</td><td>both GLOBAL (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L198"></a>)</td></tr>
+<tr><td><code>NOLOCALS</code></td><td>forbid locals. The launch then uses flat <code>blockIdx*blockDim+threadIdx</code> indices</td><td>no LOCAL/WARP/GROUP_REDUCE axes yet (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L122"></a>)</td></tr>
+</table>
+<p>An argument of 0 means "the whole axis" (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L140"></a>). Every illegal opt raises <code>KernelOptError</code>. The heuristic catches it and moves on, and BEAM uses it to prune its action list. Elsewhere in the book you have seen <code>GROUPTOP(0,16)</code> on row sums (<code>r_1024_16_64</code>, chapter 5) and <code>UPCAST(0,4)</code> plus <code>LOCAL(0,32)</code> on <code>a + b</code> (<code>E_8192_32_4</code>, chapter 1). The matmul uses UPCAST, UNROLL, LOCAL and, under BEAM, SWAP.</p>
+
+<h2>Apply the opts yourself</h2>
+<p>The widget below starts from the AST's loop nest and applies the opts listed in the capture's <code>applied_opts</code>, one click per opt, following the <code>shift_to</code> rules above. The bar shows the axes in the Scheduler's order, coloured by type. Each segment's width is proportional to log₂ of its size, so the total width (30 bits = 1024³) never changes: an opt only moves bits between types. Below the bar you can see the name being built, what each original index <code>i</code>, <code>j</code>, <code>k</code> is made of, and the launch shape. At the last step it checks the simulated name, grid and block against what tinygrad actually produced on the L4. Switch the preset to see BEAM's seven opts.</p>
+<div id="opt-viz" data-keys="matmul/default,matmul/beam2"></div>
+<p>Look at the <code>j</code> formula at the end of each preset. Under the heuristic it is <code>64·g1 + 4·l1 + u0</code>: the upcast is stride 1, so each thread owns four <em>adjacent</em> columns and can load them as one <code>float4</code>. Under BEAM it is <code>64·g0 + 16·u0 + l0</code>: the local is stride 1, so adjacent <em>threads</em> own adjacent columns, and each thread's four columns are 16 apart. Same four opt types, different order, different memory pattern. The CUDA source in the next sections shows both patterns.</p>
+<div class="callout">To check the simulation against tinygrad itself, a CPU experiment renders for sm_89 (with <code>NVCCRenderer</code> and a no-op compiler, so no GPU is needed) and prints <code>Scheduler.shape_str()</code> after each opt. The script is <code>.amp/in/scratchpad/ch0607/opt_steps.py</code>. Its output for the heuristic opts (range ids in parentheses):
+<pre class="code static" data-lang="text">
+start    L0:1024(id1) L1:1024(id2) R0:1024(id0)
+global   g0:1024(id1) g1:1024(id2) R0:1024(id0)
+UPCAST axis=1 arg=4   g0:1024(id1) g1:256(id2) u0:4(id3) R0:1024(id0)
+UPCAST axis=0 arg=4   g0:256(id1) g1:256(id2) u0:4(id3) u1:4(id4) R0:1024(id0)
+UNROLL axis=0 arg=4   g0:256(id1) g1:256(id2) u0:4(id3) u1:4(id4) R0:256(id0) r0:4(id5)
+LOCAL  axis=0 arg=8   g0:32(id1) g1:256(id2) l0:8(id6) u0:4(id3) u1:4(id4) R0:256(id0) r0:4(id5)
+LOCAL  axis=1 arg=16  g0:32(id1) g1:16(id2) l0:8(id6) l1:16(id7) u0:4(id3) u1:4(id4) R0:256(id0) r0:4(id5)
+r_32_16_8_16_4_4_256_4
+</pre>
+For BEAM's list, the same script ends at <code>r_16_8_16_8_4_4_4_256_4</code>. Its last step, <code>SWAP(0,1)</code>, turns <code>g0:8(id1) g1:16(id2)</code> into <code>g0:16(id1) g1:8(id2)</code>.</div>
+
+<h2>Inside hand_coded_optimizations</h2>
+<p>With no BEAM and no NOOPT, <code>apply_opts</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L334"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L351"></a>) calls <code>hand_coded_optimizations</code> in <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L8"></a>. This is a fixed sequence of rules, each guarded by a condition on the kernel. Here is the sequence for our matmul, in source order, with the decision each step made:</p>
+<ol>
+<li><strong>Tensor cores</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L28"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L41"></a>). It tries <code>Opt(TC, axis, …)</code> for axes 0–2. The inputs are fp32, and the only fp32 tensor core on sm_89 is TF32, which CUDA skips unless <code>ALLOW_TF32=1</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L226"></a>). Every attempt raises, so the step does nothing. Chapter 7 shows the fp16 case, where this step succeeds and returns early.</li>
+<li><strong>Matvec</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L62"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L78"></a>). This step requires the second buffer's index to contain every range the first one uses. A's index uses <code>i</code>, B's doesn't, so it is skipped.</li>
+<li><strong>Grouping</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L81"></a>). Only for outputs of at most 2048 elements. Ours has 1M, so it is skipped.</li>
+<li><strong>Masked upcasts</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L94"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L109"></a>). There are no WHERE gates, so nothing happens.</li>
+<li><strong>The upcast loop</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L114"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L137"></a>). While the output is ≥ 1024 elements and fewer than 32 values are upcast, it considers each output axis that some buffer does <em>not</em> index (an axis along which that buffer is broadcast). Upcasting such an axis lets that buffer's value be reused across the upcast registers. Both <code>i</code> (B ignores it) and <code>j</code> (A ignores it) qualify. Candidates are sorted by (number of buffers using the axis, sum of its strides): <code>i</code> has strides 1024 in A and in C (sum 2048), <code>j</code> has stride 1 in B and in C (sum 2). So <code>UPCAST(1,4)</code> (on <code>j</code>) comes first, then <code>UPCAST(0,4)</code> (on <code>i</code>). With both axes upcast there is no candidate left and the loop stops at 16 values.</li>
+<li><strong>Unroll the reduce</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L141"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L153"></a>). K = 1024 is larger than 32, so it unrolls by 4: <code>UNROLL(0,4)</code>.</li>
+<li><strong>Default float4 upcast</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L156"></a>). Skipped, because something is already upcast.</li>
+<li><strong>Locals</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L162"></a>–<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L179"></a>). It ranks global axes, broadcast axes first, then higher axis first. Axis 1 gets the first size from [16, 8, 4, 3, 2] that divides it (only axis 0 may also try 32): 16. Axis 0 then gets the largest size that keeps the block at most 128 threads: 8. They are applied in axis order: <code>LOCAL(0,8)</code>, <code>LOCAL(1,16)</code>.</li>
+<li><strong>Threads</strong> (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L183"></a>). CPU only.</li>
+</ol>
+<p>The result is exactly the captured list: <code>UPCAST(1,4), UPCAST(0,4), UNROLL(0,4), LOCAL(0,8), LOCAL(1,16)</code>. None of it was timed. The heuristic is a handful of rules of thumb (broadcast axes are good to upcast, blocks of 128 threads, a float4-friendly unroll of 4), and it produced a kernel 54× faster than NOOPT. The fp16 matmul in chapter 7 with <code>TC=0</code> goes through the same steps and ends up with <code>r_64_32_8_16_4_4_512_4</code>: the same opts on a 2048³ problem.</p>
+<div class="pass-stepper" data-key="matmul/default" data-kernel="0" data-stages="codegen" data-start="flatten range" data-title="Codegen passes of r_32_16_8_16_4_4_256_4, starting right after apply_opts"></div>
+<p>In the stepper, <code>flatten range</code> is the first snapshot after the opts were applied (<code>get_optimized_ast</code> runs it, <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L57"></a>). The AST now has eight ranges with types GLOBAL, LOCAL, UPCAST, REDUCE and UNROLL. Step to <code>expander</code>: the UPCAST and UNROLL ranges disappear and become vectors of constants. Then step to <code>add gpudims</code>: GLOBAL and LOCAL become <code>SPECIAL</code> uops.</p>
+
+<h2>Register tiling: why 4×4 is fast</h2>
+<p>The NOOPT kernel makes each thread compute one output <code>C[i][j]</code>. For every k it loads <code>A[i][k]</code> and <code>B[k][j]</code> and does one multiply-add: two loads per FFMA. The GPU can issue FFMAs far faster than its load path can supply operands, so this kernel spends its time waiting for loads.</p>
+<p>UPCAST changes the shape of a thread's work. With <code>i</code> and <code>j</code> both upcast by 4, a thread owns a 4×4 tile of C held in 16 registers. At each k it loads four values of A (one column slice of its 4 rows) and four of B (one row slice of its 4 columns), and performs the 16 multiply-adds of their outer product. That is 8 loads for 16 FFMAs. BEAM's kernel upcasts <code>i</code> twice (16 rows) and <code>j</code> once (4 columns): 20 loads for 64 FFMAs. Step through it:</p>
+<div id="regtile" data-keys="matmul/noopt,matmul/default,matmul/beam2"></div>
+<p>The generated CUDA shows the tile directly. <code>float buf0[16]</code> holds the 16 accumulators. Each loop iteration loads 8 <code>float4</code>s: 4 rows of A × 4 consecutive k (that is the UNROLL), and 4 consecutive k of B × 4 columns (that is the stride-1 UPCAST on <code>j</code>). Then 16 statements each add four products into their accumulator:</p>
+<div class="kernel-view" data-key="matmul/default" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="float4 val|buf0\+0\) =|buf0\[16\]"></div>
+<p>On the SASS tab, the loop body (from <code>/*0160*/</code>, the target of the back branch, to <code>@P0 BRA 0x160</code>) has 8 <code>LDG.E.128</code> (one per <code>float4</code>) and the 64 FFMAs. ptxas counts <code>Used 56 registers</code>. The NOOPT kernel uses 47 registers for a single accumulator: ptxas unrolled its scalar loop 16 times (the counter steps by <code>0x10</code> up to <code>0x400</code>), so its loop body holds 32 scalar <code>LDG.E</code> for 16 FFMAs. BEAM's 64 accumulators need 128 registers, with 256 FFMAs and 32 loads per iteration (16 <code>LDG.E.128</code> for A, 16 scalar <code>LDG.E</code> for B).</p>
+<div class="split">
+<div class="sass-mix" data-key="matmul/default" data-top="8" data-title="SASS mix: heuristic r_32_16_8_16_4_4_256_4"></div>
+<div class="sass-mix" data-key="matmul/beam2" data-top="8" data-title="SASS mix: BEAM r_16_8_16_8_4_4_4_256_4"></div>
+</div>
+<p>tinygrad's own cost estimate (<code>estimates.lds</code> in the capture: bytes moved by all load and store instructions, summed over all threads) tells the same story at whole-kernel scale:</p>
+<table>
+<tr><th>kernel</th><th>tile per thread</th><th>FFMA per float loaded</th><th>bytes moved by loads+stores (estimate)</th><th>that ÷ time</th></tr>
+<tr><td>NOOPT</td><td>1×1</td><td>0.5</td><td>8.59 GB</td><td>231 GB/s</td></tr>
+<tr><td>heuristic</td><td>4×4</td><td>2</td><td>2.15 GB</td><td>3.1 TB/s</td></tr>
+<tr><td>BEAM=2</td><td>16×4</td><td>3.2</td><td>1.35 GB</td><td>6.0 TB/s</td></tr>
+</table>
+<p>The last column is far above the L4's 300 GB/s of DRAM bandwidth. The inputs are only 8 MB, so most of these loads hit in the 48 MB L2 or the per-SM L1, and DRAM traffic is a small fraction. None of these kernels uses shared memory (there is no <code>__shared__</code> and no <code>BAR</code> in the SASS): all data reuse comes from registers and the caches. What limits them is how many load instructions the SMs can issue and how fast the caches answer, and a register tile cuts both.</p>
+<div class="callout">Register tiling costs registers. With 128 registers per thread, an SM's 64K-register file holds at most 512 of BEAM's threads, versus 1536 threads at 40 registers or fewer. Fewer resident warps means less latency hiding. The tradeoff is exactly the kind of thing that is hard to predict and easy to measure, which is the case for BEAM.</div>
+
+<h2>From axes to blockIdx and threadIdx: gpudims</h2>
+<p>The opts decide which axes are GLOBAL and LOCAL. The pass <code>add gpudims</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L331"></a>) turns them into hardware indices. <code>add_gpudims</code> (<a class="src" data-src="tinygrad/codegen/gpudims.py#L41"></a>–<a class="src" data-src="tinygrad/codegen/gpudims.py#L88"></a>) does four things:</p>
+<ol>
+<li>It collects global dims (GLOBAL and THREAD ranges) and local dims (WARP, LOCAL and GROUP_REDUCE ranges), sorted by range id (<a class="src" data-src="tinygrad/codegen/gpudims.py#L50"></a>).</li>
+<li>It makes <code>SPECIAL</code> uops for them through <code>get_grouped_dims</code> (<a class="src" data-src="tinygrad/codegen/gpudims.py#L27"></a>). If there are more than three dims, or one exceeds the hardware limit, it first tries to merge adjacent dims and otherwise splits a dim by its smallest factor. Then it rebuilds each original index from the flat id with <code>//</code> and <code>%</code>. The CUDA limits are <code>global_max = (2147483647, 65535, 65535)</code> and <code>local_max = (1024, 1024, 64)</code> (<a class="src" data-src="tinygrad/renderer/cstyle.py#L398"></a>).</li>
+<li>Globals are passed with <code>reverse=True</code> (<a class="src" data-src="tinygrad/codegen/gpudims.py#L70"></a>), so the <em>last</em> global axis becomes <code>blockIdx.x</code>. Locals keep their order: the first local is <code>threadIdx.x</code>.</li>
+<li>It replaces each RANGE with its index (<a class="src" data-src="tinygrad/codegen/gpudims.py#L73"></a>–<a class="src" data-src="tinygrad/codegen/gpudims.py#L88"></a>). If a global store does not use some local range, it also adds a <code>lidx==0</code> mask, which is where the <code>if (lidx0==0)</code> of grouped reductions comes from.</li>
+</ol>
+<p>The renderer prints a SPECIAL as <code>int gidx0 = blockIdx.x; /* 16 */</code> (<code>code_for_workitem</code>, <a class="src" data-src="tinygrad/renderer/cstyle.py#L417"></a>), and <code>__launch_bounds__</code> is the product of the local sizes (<a class="src" data-src="tinygrad/renderer/cstyle.py#L155"></a>). <code>ProgramInfo.from_sink</code> then reads the SPECIALs to fill <code>global_size</code> and <code>local_size</code> (<a class="src" data-src="tinygrad/uop/ops.py#L1241"></a>–<a class="src" data-src="tinygrad/uop/ops.py#L1261"></a>). Note that <code>global_size</code> is the number of <em>blocks</em>, the CUDA grid, not the total number of threads.</p>
+<p>This reversal is why the heuristic kernel's name starts with <code>32_16</code> while its grid is <code>16 × 32</code>: <code>g0</code> (32, rows) became <code>blockIdx.y</code> and <code>g1</code> (16, columns) became <code>blockIdx.x</code>. In the source, <code>gidx0 = blockIdx.x; /* 16 */</code> appears in <code>alu0 = ((gidx0&lt;&lt;6)+(lidx1&lt;&lt;2))</code>, the column offset. BEAM's <code>SWAP(0,1)</code> flips this: its rows are on <code>blockIdx.x</code> (<code>gidx0&lt;&lt;17</code> = 128 rows × 1024).</p>
+<div id="blockmap" data-keys="matmul/default,matmul/beam2"></div>
+<p>The map shows what one block computes, coloured by warp, with the hovered thread in white. Under the heuristic, a block covers 32 rows × 64 columns and each thread a compact 4×4 square. Lanes 0–7 of a warp (<code>threadIdx.x</code>) are 4 rows apart and read the same <code>float4</code> of B (B does not depend on the row). Lanes 8 apart (<code>threadIdx.y</code>) read neighbouring <code>float4</code>s of B. Under BEAM, a block covers 128 rows × 64 columns, and each thread owns 16 rows spaced 8 apart × 4 columns spaced 16 apart. Here 16 consecutive lanes read 16 consecutive floats of B, one coalesced 64-byte access per load instruction, which is why BEAM's B loads can be scalar <code>LDG.E</code> without being slow.</p>
+<div class="callout warn"><strong>Why NOOPT is 37 ms.</strong> With no LOCAL opt there are no local dims, so <code>local_size</code> is (1,1,1) and the source says <code>__launch_bounds__(1)</code>: 1,048,576 blocks of one thread each. A warp is the unit of execution, so each block occupies a whole warp scheduler slot for one active lane. On top of that, the CUDA programming guide limits compute capability 8.9 to 24 resident blocks per SM, so at most 24 threads run per SM, out of 1536 thread slots. The kernel reaches 0.06 TFLOP/s.</div>
+<div class="kernel-view" data-key="matmul/noopt" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="gidx|launch_bounds"></div>
+
+<h2>BEAM search</h2>
+<p>Setting <code>BEAM=2</code> replaces the heuristic with search. <code>compile_linear</code> stamps the beam width onto every kernel (<code>pm_beam</code>, <a class="src" data-src="tinygrad/engine/realize.py#L246"></a>, <a class="src" data-src="tinygrad/engine/realize.py#L307"></a>). <code>apply_opts</code> then allocates real buffers for the kernel's arguments and calls <code>beam_search</code> with device access enabled (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L340"></a>–<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L345"></a>). The search lives in <a class="src" data-src="tinygrad/codegen/opt/search.py#L111"></a>:</p>
+<ul>
+<li><strong>Action space.</strong> A fixed list of 193 opts in this build (<a class="src" data-src="tinygrad/codegen/opt/search.py#L14"></a>–<a class="src" data-src="tinygrad/codegen/opt/search.py#L26"></a>): UPCAST by {0,2,3,4,5,7} on axes 0–7, UNROLL by {0,4,7} on axes 0–4, LOCAL by {2,3,4,8,13,16,29} on axes 0–5, GROUPTOP and GROUP variants, TC variants, every SWAP pair among axes 0–4, and THREAD. <code>get_kernel_actions</code> (<a class="src" data-src="tinygrad/codegen/opt/search.py#L87"></a>) tries each one on a copy of the Scheduler and keeps those that don't raise <code>KernelOptError</code> and stay within 256 upcast values and 1024 local threads.</li>
+<li><strong>A round.</strong> Every kernel in the current beam is expanded by every legal action (<a class="src" data-src="tinygrad/codegen/opt/search.py#L134"></a>). The candidates are compiled in parallel worker processes by <code>_try_compile</code> (<a class="src" data-src="tinygrad/codegen/opt/search.py#L58"></a>), which runs the full <code>to_program</code> pipeline and rejects kernels of 3000 uops or more. Candidates are deduplicated by compiled binary, so two opt lists that produce the same code are timed once (<a class="src" data-src="tinygrad/codegen/opt/search.py#L140"></a>), and those estimated to need more than 1000× the least compute are dropped.</li>
+<li><strong>Timing.</strong> <code>_time_program</code> (<a class="src" data-src="tinygrad/codegen/opt/search.py#L38"></a>) runs each candidate up to 3 times on the real GPU and stops early once it is 3× slower than the current best. To keep this fast it shrinks the grid to at most 65536 blocks and scales the measured time back up (<code>get_test_global_size</code>, <a class="src" data-src="tinygrad/codegen/opt/search.py#L28"></a>). It also clears the L2 cache between runs when the device supports it.</li>
+<li><strong>Selection.</strong> Candidates are sorted by time, and the fastest <code>amt</code> (here 2) become the next beam. The search stops when the best time improves by less than <code>BEAM_MIN_PROGRESS</code> = 0.01 µs (<a class="src" data-src="tinygrad/codegen/opt/search.py#L166"></a>).</li>
+<li><strong>Cache.</strong> The winning opt list is stored in tinygrad's disk cache under the AST's key, the beam width and the device (<a class="src" data-src="tinygrad/codegen/opt/search.py#L112"></a>, <a class="src" data-src="tinygrad/codegen/opt/search.py#L176"></a>). The next run with the same kernel skips the search and just replays the opts. <code>IGNORE_BEAM_CACHE=1</code> forces a new search.</li>
+</ul>
+<div id="beam-tree" class="widget widget-body" data-keys="matmul/beam2"></div>
+<p>Each round adds exactly one opt to each beam member, so the 7 opts in the capture mean the search ran seven rounds that each kept a faster kernel before it stopped. Because the actions are tried in a fixed order on top of each other, BEAM's opt lists look different from the heuristic's: it chose LOCALs <em>before</em> UPCASTs, and the previous sections showed what that does to the stride of each part. It also added a second UPCAST on <code>i</code> (its third UPCAST overall, 16 rows per thread) and a SWAP. FP32 tensor cores were in the action list too (<code>TC</code>), but they fail for the same TF32 reason as in the heuristic.</p>
+<div class="kernel-view" data-key="matmul/beam2" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="buf0\[64\]|gidx|lidx"></div>
+<div class="callout">BEAM measures on the actual GPU, so its result depends on the hardware, the driver and the noise of the timing runs. Two searches can return different opt lists of similar speed. The capture is one run, on one L4. A BEAM result is also only as good as its action space: it cannot invent shared-memory tiling or software pipelining, which the hand-written cuBLAS kernel uses (see below). The <code>DEBUG=2</code> output of a BEAM run prints one line per round with the best time and the <code>colored_shape()</code> of the leader.</div>
+
+<h2>How close to the L4's limits</h2>
+<p>NVIDIA's L4 datasheet lists 30.3 TFLOPS of fp32 at boost clock (58 SMs × 128 FP32 lanes × 2 FLOPs per FMA × 2.04 GHz). That is an upper bound; the clock under load can be lower. Dividing 2·1024³ FLOPs by each time:</p>
+<div id="tflops" data-keys="matmul/noopt,matmul/default,matmul/beam2,matmul/torch"></div>
+<p>The heuristic reaches about 10% of peak, BEAM about 32% and cuBLAS about 48%. A matmul's arithmetic intensity at the DRAM level is high (2·1024³ FLOPs over 12 MB of compulsory traffic, ≈ 170 FLOP/byte, above the L4's balance point of roughly 30.3 TFLOP/s ÷ 300 GB/s ≈ 100 FLOP/byte), so in principle it is compute-bound. In practice these kernels are bound by the load path between the caches and the registers, as computed above. The way forward is the one cuBLAS takes: stage tiles of A and B through shared memory, so that each global load feeds a whole block rather than one thread, and overlap those loads with the math.</p>
+<div class="torch-view" data-key="matmul/torch" data-tabs="eager,output" data-tab="eager"></div>
+<p>PyTorch does no code generation for this. Eager mode calls cuBLAS, and the profiler shows <code>ampere_sgemm_128x64_nn</code>. The name is cuBLAS's own: an Ampere-generation SIMT (non-tensor-core) sgemm kernel, which by its name uses a 128×64 tile, reused here on the Ada L4. The fp32 matmul stays on FFMA because PyTorch keeps TF32 off for matmuls by default. Inductor does the same: <code>extern_kernels.mm(arg0_1, arg1_1, out=buf0)</code> in the output code. We have no SASS for cuBLAS in the captures, so the shared-memory claim above comes from how such kernels are generally built, not from this capture.</p>
+
+<h2>What to remember</h2>
+<ul>
+<li>The optimizer edits the loop nest of a kernel AST. Every opt except TC, PADTO, SWAP and NOLOCALS is one <code>shift_to</code>: it splits an axis into <code>outer·amount + inner</code> and gives the inner part a new AxisType.</li>
+<li>AxisType decides what an axis becomes: GLOBAL → <code>blockIdx</code>, LOCAL → <code>threadIdx</code>, UPCAST → registers, REDUCE → the loop, UNROLL → straight-line loop body. The kernel name lists the axis sizes in that order.</li>
+<li>Opt order sets the strides: the first split of an axis owns its stride-1 part. That decides whether a thread's values are adjacent (float4 loads) or a warp's lanes are adjacent (coalesced loads).</li>
+<li>The heuristic is a fixed, untimed recipe: TC if possible, else upcast broadcast axes, unroll the reduce by 4, and add locals up to 128 threads. BEAM times real candidates on the GPU and caches the winning opt list.</li>
+<li>Register tiling turns 2 loads per FFMA into 0.31 (BEAM) by reusing every loaded value across a tile of accumulators: 37.24 ms → 686 µs → 224 µs. cuBLAS still wins at 149 µs.</li>
+</ul>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch06.js"></script></body></html>

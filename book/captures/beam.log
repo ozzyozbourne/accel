@@ -1,0 +1,2 @@
+matmul/beam2: 1 kernels, 519 passes, check OK (err 2.29e-04), times [['r_16_8_16_8_4_4_4_256_4', 224.26]]
+BEAM-DONE

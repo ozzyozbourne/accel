@@ -13,6 +13,7 @@ tinygrad and Rust (NVIDIA's cuda-oxide), plus the debugger and profilers.
 | `async/` | Streams, `cp.async` and tensor cores in C++ (`*.cu`), Mojo (`async_test.mojo`) and Rust (`rust/`). |
 | `async/asm/` | PTX and SASS of the async/tensor core kernels from all three languages. |
 | `profiles/` | Nsight Systems (`.nsys-rep`) and Nsight Compute (`.ncu-rep`) reports, C++ (T4) and Mojo (A100). |
+| `book/` | *From Python to SASS*: an interactive HTML book on how tinygrad lowers kernels to CUDA C, PTX and SASS on an L4, next to PyTorch. Open `book/index.html`. |
 | `setup/` | Installs CUDA 13, Mojo, LLVM 21 and cuda-oxide on a GPU-less machine, and builds the Rust code. |
 
 ## Results

@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2. UOps and the rewrite engine · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+.ch2svg { width: 100%; max-width: 860px; margin: 0 auto; height: auto; display: block; }
+.ch2svg .e { stroke: #4a5a70; stroke-width: 1.6; fill: none; }
+.ch2svg .elabel { fill: var(--muted); font: 11px var(--mono); }
+.ch2svg .n rect { fill: var(--panel2); stroke: var(--s-tensor); stroke-width: 1.5; transition: fill .25s, stroke .25s; }
+.ch2svg .n text { fill: #e6edf3; font: 600 12px var(--mono); text-anchor: middle; pointer-events: none; }
+.ch2svg .n .sub { fill: var(--muted); font: 10px var(--mono); }
+.ch2svg .n.const rect { stroke: #f9c97c; } .ch2svg .n.var rect { stroke: var(--s-schedule); }
+.ch2svg .n.hot rect { fill: #3a2e10; stroke: #fbbf24; stroke-width: 2.5; }
+.ch2svg .n.match rect { fill: #3b1d1d; stroke: #f87171; stroke-width: 2.5; }
+.ch2svg .n.focus rect { fill: #13283d; stroke: var(--accent); stroke-width: 2.5; }
+.ch2svg .n.dim { opacity: .35 !important; }
+#dag-demo .cap, .toy-msg { padding: 8px 14px 12px; color: #c3ccd6; font-size: 14px; min-height: 3.2em; }
+.pm-split { padding: 10px; } .pm-lines { max-height: 420px; font-size: 12px; } .pm-lines .ln { cursor: pointer; white-space: pre-wrap; word-break: break-all; }
+.pm-info { padding: 10px 4px; font-size: 13.5px; color: #c3ccd6; min-height: 5em; }
+.toy-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; padding: 10px 12px 0; }
+.toy-expr { text-align: center; color: var(--accent); padding: 4px; }
+.toy-rules .rule { border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; margin-bottom: 6px; font-size: 12.5px; transition: background .25s, border-color .25s; }
+.toy-rules .rule code { display: block; margin-top: 3px; font-size: 11px; white-space: pre-wrap; background: none; padding: 0; color: #9fb3c8; }
+.toy-rules .rule.on { background: #3a2e10; border-color: #fbbf24; }
+.toy-rules .rule a.src { font-size: 11px; margin-left: 6px; }
+.opgroups td:first-child { white-space: nowrap; font-weight: 600; }
+.opgroups code { font-size: 12px; }
+@media (max-width: 1000px) { .toy-grid { grid-template-columns: 1fr; } }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 2</div><h1>UOps and the rewrite engine</h1>
+  <p class="lede">tinygrad has one intermediate representation, the <code>UOp</code>, and one way to transform it:
+  pattern-matching graph rewrites. The lazy tensor graph, the scheduler's kernel graph, each kernel's AST and the final
+  list of instructions are all UOp graphs, and every step between them is a <code>graph_rewrite</code> with a list of rules.
+  In this chapter we take a UOp apart, learn to read the <code>pyrender</code> listings used throughout this book, build the
+  pattern matcher up from <code>UPat</code>, and watch real rules turn <code>relu</code> into a <code>MAX</code> and GELU's
+  <code>tanh</code> into one <code>exp2</code>.</p>
+  <div class="pipeline" data-active="tensor"></div>
+
+  <h2>One IR for everything</h2>
+  <p>Most compilers have several IRs: a graph of high-level ops, then a loop IR, then something close to machine
+  instructions, each with its own data structures and passes. PyTorch's <code>torch.compile</code> is like this: an FX graph,
+  then Inductor's loop-level IR, then Triton, then Triton's MLIR dialects, then LLVM IR. tinygrad 0.14 has a single node
+  type for all of it. A <code>Tensor</code> is a thin wrapper around one UOp (<code>__slots__ = "uop", "is_param", "grad"</code>,
+  <a class="src" data-src="tinygrad/tensor.py#L285"></a>). The scheduler's kernel graph, a kernel's AST and the linearized
+  program are also UOps. A stage of the compiler is just a set of ops that may legally appear in the graph at that point:
+  <code>RESHAPE</code> exists only in the tensor graph, <code>RANGE</code> appears during scheduling, <code>SPECIAL</code> (a
+  thread index) only after codegen picks launch dimensions.</p>
+  <p>One node type also means one transformation tool, and that tool is the topic of the second half of this chapter.
+  Chapter 1 showed <code>a + b</code> going through about fifty named passes. Each of those passes is a call to
+  <code>graph_rewrite(graph, rules)</code>. If you understand UOps and <code>graph_rewrite</code>, every later chapter is
+  "here are the rules this pass uses".</p>
+
+  <h2>What a UOp is</h2>
+  <p>Here is the whole data part of the class (<a class="src" data-src="tinygrad/uop/ops.py#L233"></a>):</p>
+  <pre class="code static" data-lang="python">
+# NOTE: this should be frozen, but frozen is slower
+@dataclass(eq=False, slots=True)
+class UOp(RandMixin, metaclass=UOpMetaClass):
+  op:Ops
+  dtype:DType = dtypes.void
+  src:tuple[UOp, ...] = tuple()
+  arg:Any = None
+  tag:Any = None
+</pre>
+  <p>Five fields:</p>
+  <ul>
+    <li><b><code>op</code></b>: what the node does, a member of the <code>Ops</code> enum (<code>ADD</code>, <code>RESHAPE</code>, <code>RANGE</code>, ...).</li>
+    <li><b><code>dtype</code></b>: the result type. It includes the "weak" types <code>weakint</code>/<code>weakfloat</code> for Python numbers that adopt the dtype of whatever they meet, and <code>void</code> for nodes with no value, such as <code>STORE</code> and <code>SINK</code>.</li>
+    <li><b><code>src</code></b>: a tuple of input UOps. These are the graph's edges, and there are no others. A node knows its inputs but not its consumers.</li>
+    <li><b><code>arg</code></b>: op-specific static data. For a <code>CONST</code> it is the value, for a <code>PERMUTE</code> the axis order, for a <code>REDUCE</code> the pair <code>(op, number of axes)</code>, for a <code>BUFFER</code> a <code>ParamArg(slot, dtype, device)</code>.</li>
+    <li><b><code>tag</code></b>: a free slot passes use to mark nodes temporarily. The first tensor-graph pass, <code>number the uops</code>, tags the realize targets; in listings this shows as <code>.rtag((0,))</code>.</li>
+  </ul>
+  <p>Shapes are not stored. <code>UOp._shape</code> derives a node's shape from its sources and arg when asked
+  (<a class="src" data-src="tinygrad/uop/ops.py#L327"></a>), and even movement-op arguments are UOps: a <code>RESHAPE</code>'s
+  target shape is a <code>STACK</code> of <code>CONST</code>s in <code>src[1]</code>, so a symbolic size is no different from a
+  constant one.</p>
+
+  <h3>Immutable, and hash-consed</h3>
+  <p>UOps are never modified. The comment says the dataclass "should be frozen", and nothing in the compiler assigns to these
+  fields; to change a node you call <code>replace()</code>, which builds a new UOp (and returns <code>self</code> if nothing
+  differs, <a class="src" data-src="tinygrad/uop/ops.py#L250"></a>). Immutability makes the second property safe:
+  <b>structurally identical UOps are the same Python object</b>. Construction goes through a metaclass that keeps a cache
+  keyed by all five fields (<a class="src" data-src="tinygrad/uop/ops.py#L186"></a>):</p>
+  <pre class="code static" data-lang="python">
+class UOpMetaClass(type):
+  ucache:dict[tuple, weakref.ReferenceType[UOp]] = {}
+  def __call__(cls, op:Ops, dtype:DType|None=None, src:tuple[UOp,...]=tuple(), arg:Any=None, tag:Any=None, ...):
+    ...
+    if (wret:=UOpMetaClass.ucache.get(key:=(op, dtype, src, arg, tag), None)) is not None and (ret:=wret()) is not None: return ret
+    UOpMetaClass.ucache[key] = weakref.ref(created:=super().__call__(*key))
+</pre>
+  <p>This is <em>hash-consing</em>. The key contains <code>src</code>, a tuple of UOps, and UOps compare by identity
+  (<code>eq=False</code>), so the lookup is cheap: two nodes are equal exactly when they have the same op, dtype, arg and tag
+  and literally the same source objects. Because every source was itself deduplicated when it was built, that local check is
+  enough to deduplicate whole subgraphs, bottom-up, at construction time. The cache holds weak references, and
+  <code>__del__</code> removes the entry when the last reference dies (<a class="src" data-src="tinygrad/uop/ops.py#L244"></a>).</p>
+  <p>A small CPU experiment (tinygrad 0.14 in our venv, <code>DEV=CPU</code>) shows it:</p>
+  <pre class="code static" data-lang="python">
+a, b, c = Tensor.empty(1024,1024), Tensor.empty(1024,1024), Tensor.empty(1024,1024)
+t = (a*b+c).relu()*2.0
+((a*b+c).relu()*2.0).uop is t.uop          # True: built again, same object
+len(t.uop.sink().toposort())                # 17
+</pre>
+  <p>Building the same expression a second time allocates nothing new; every constructor call hits the cache. The animation
+  below shows what this does to a graph that repeats a subexpression.</p>
+  <div id="dag-demo"></div>
+  <p>Hash-consing gives the compiler three things. A <b>graph is a DAG by construction</b>, so a value written twice is computed
+  once unless a pass decides otherwise. <b>Equality is <code>is</code></b>: a rule like "<code>x/x → 1</code>" only has to compare
+  two pointers. And <b>caches can be keyed on graphs</b>. For caches that must survive across processes there is also
+  <code>UOp.key</code>, a SHA-256 over op, dtype, arg and the keys of the sources (<a class="src" data-src="tinygrad/uop/ops.py#L264"></a>).
+  The schedule cache and the compiled-kernel cache use it, which is why an identical kernel AST is only compiled once.</p>
+
+  <h2>The op set</h2>
+  <p><code>Ops</code> is a single enum of about 80 members (<a class="src" data-src="tinygrad/uop/__init__.py#L13"></a>). Its
+  order matters, since the comment above it says it "controls the order of the toposort". The groups in the source tell you
+  where in the pipeline each op can live:</p>
+  <table class="opgroups">
+    <tr><th>group</th><th>ops</th><th>where they live</th></tr>
+    <tr><td>movement</td><td><code>RESHAPE PERMUTE EXPAND PAD SHRINK FLIP</code></td><td>"the core 6 movement ops! these only exist in the tensor graph" (<a class="src" data-src="tinygrad/uop/__init__.py#L95"></a>). Rangeify turns them into index math (Chapter 3); <code>SHRINK</code> comes back much later as a vector-load helper.</td></tr>
+    <tr><td>reduce</td><td><code>REDUCE ALLREDUCE</code></td><td>tensor graph and kernel AST; codegen turns <code>REDUCE</code> into a register accumulator.</td></tr>
+    <tr><td>scheduler hints, buffers</td><td><code>CONTIGUOUS DETACH STAGE COPY</code> ...</td><td>tensor graph and scheduler only ("ops that don't exist in programs").</td></tr>
+    <tr><td>ALU</td><td>unary <code>EXP2 LOG2 SIN SQRT RECIPROCAL NEG TRUNC</code>; binary <code>ADD MUL MAX CMPLT CMPNE ...</code>; ternary <code>WHERE MULACC</code>. <code>CAST</code> and <code>BITCAST</code> are not ALU ops but join them in <code>GroupOp.Elementwise</code>.</td><td>everywhere. Note the short list: no <code>EXP</code>, <code>TANH</code>, <code>SUB</code> in practice, or <code>DIV</code> for floats. The front end expresses everything with these.</td></tr>
+    <tr><td>memory</td><td><code>BUFFER PARAM INDEX LOAD STORE</code></td><td><code>BUFFER</code> in the tensor graph, <code>PARAM</code> (a kernel argument) and <code>INDEX</code> from scheduling on, explicit <code>LOAD</code> only late in codegen.</td></tr>
+    <tr><td>structure, control</td><td><code>SINK AFTER GROUP CALL LINEAR RANGE END SPECIAL BARRIER</code></td><td><code>SINK</code> is a root, <code>AFTER</code> an ordering edge, <code>RANGE</code>/<code>END</code> loops, <code>SPECIAL</code> a GPU thread index.</td></tr>
+  </table>
+  <p><code>GroupOp</code> (<a class="src" data-src="tinygrad/uop/__init__.py#L106"></a>) names these sets so rules can say
+  <code>UPat(GroupOp.ALU)</code>. It also records algebraic facts: <code>Commutative</code>, <code>Associative</code> and
+  <code>Idempotent</code> are sets of ops that rewrite rules consult.</p>
+
+  <h2>How Tensor methods build UOps</h2>
+  <p>Nearly the whole <code>Tensor</code> API lives in mixins under <code>tinygrad/mixin/</code>: elementwise math, movement,
+  reductions, creation. <code>UOp</code> uses the same mixins, so <code>UOp</code> and <code>Tensor</code> both have
+  <code>.reshape</code>, <code>.sum</code> and <code>.relu</code>. The mixins only need three primitives from the class,
+  and <code>Tensor</code> implements each one by applying the UOp version to <code>self.uop</code> and wrapping the result
+  (<a class="src" data-src="tinygrad/tensor.py#L334"></a>):</p>
+  <pre class="code static" data-lang="python">
+def alu(self, op: Ops, *src: Tensor) -> Tensor: return self._apply_uop(lambda *u: u[0].alu(op, *u[1:]), *src)
+def _mop(self, op:Ops, arg) -> Tensor: return self._apply_uop(UOp._mop, op=op, arg=arg)
+def _rop(self, op:Ops, axis:tuple[int, ...]) -> Tensor: return self._apply_uop(UOp._rop, op=op, axis=axis)
+</pre>
+  <p>On the UOp side, <code>alu</code> is one line, <code>UOp(op, src=(self, *src))</code>
+  (<a class="src" data-src="tinygrad/uop/ops.py#L607"></a>). <code>_mop</code> builds a movement op with its shape
+  arguments as UOps (<a class="src" data-src="tinygrad/uop/ops.py#L787"></a>), and <code>_rop</code> permutes the reduced
+  axes to the front and emits <code>REDUCE</code> with <code>arg=(op, number of reduced axes)</code>
+  (<a class="src" data-src="tinygrad/uop/ops.py#L629"></a>). Nothing is computed. A Tensor method only adds nodes.</p>
+  <p>Higher-level functions are written in terms of these few ops. <code>a + b</code> goes <code>__add__ → add → _binop</code>,
+  which promotes dtypes and calls <code>lhs.alu(Ops.ADD, rhs)</code> (<a class="src" data-src="tinygrad/mixin/elementwise.py#L32"></a>).
+  Broadcasting adds no node: the two sources of an <code>ADD</code> may have different shapes and <code>_shape</code> works out
+  the result. <code>relu</code> is a comparison and a select, with a note on why it is not <code>maximum</code>
+  (<a class="src" data-src="tinygrad/mixin/elementwise.py#L671"></a>):</p>
+  <pre class="code static" data-lang="python">
+def relu(self) -> Self:
+  # NOTE: if you write this as self.maximum(0) the gradient is wrong, passing through half when self is 0
+  return (self > 0).where(self, 0)
+</pre>
+  <p>and the tanh form of GELU is a formula over <code>tanh</code>, which is itself <code>2*sigmoid(2x) - 1</code>, where
+  sigmoid is built on <code>exp2</code> (<a class="src" data-src="tinygrad/mixin/elementwise.py#L754"></a>,
+  <a class="src" data-src="tinygrad/mixin/elementwise.py#L776"></a>):</p>
+  <pre class="code static" data-lang="python">
+return 0.5 * self * (1 + (math.sqrt(2 / math.pi) * (self + 0.044715 * self ** 3)).tanh())
+</pre>
+  <p>So the graph a user builds is often bigger and clumsier than the math. That is deliberate: the front end stays
+  simple and correct (the relu gradient, for one), and the rewrite engine cleans up afterwards. We will see both cleanups below.</p>
+
+  <h2>Reading pyrender</h2>
+  <p>Every IR listing in this book is printed by <code>pyrender</code> (<a class="src" data-src="tinygrad/uop/render.py#L143"></a>).
+  Its output is runnable Python that rebuilds the graph. Here is the lazy graph of
+  <code>((a*b + c).relu() * 2.0)</code> exactly as captured on the L4, with the 17 UOps it describes. Hover a line to see which
+  nodes it defines, or a node to see its fields.</p>
+  <div id="pyrender-map"></div>
+  <p>The rules for reading it:</p>
+  <ul>
+    <li><b>Which nodes get a line.</b> A node gets its own line <code>cN = ...</code> if it has more than one consumer, or if its
+      op is in <code>always_rendered</code> (<code>PARAM, LOAD, SPECIAL, RANGE, CONTIGUOUS, STACK, BUFFER, COPY, CALL, FUNCTION, WHERE, END</code>),
+      or if it is a source of the <code>SINK</code>, a <code>STORE</code> or a <code>REDUCE</code>
+      (<a class="src" data-src="tinygrad/uop/render.py#L148"></a>). Everything else is inlined into its single consumer.
+      <code>CONST</code>s are always inlined. That is why <code>c11 = a*b + c</code> has a name: both the comparison and the
+      <code>WHERE</code> use it.</li>
+    <li><b>The number</b> in <code>cN</code> is the node's index in the toposort (<a class="src" data-src="tinygrad/uop/render.py#L139"></a>),
+      so the numbers have gaps where inlined nodes sit. The root is always <code>ast</code>.</li>
+    <li><b>Syntax.</b> A generic node prints as <code>UOp(Ops.X, dtype, (srcs...), arg)</code>. Common ops print as Python
+      operators (<code>*</code>, <code>+</code>, <code>&lt;</code>) or as the method that builds them: <code>.alu(Ops.WHERE, t, f)</code>,
+      <code>.exp2()</code>, <code>.reciprocal()</code>, <code>._rop(Ops.MAX, (0,))</code> for a reduce, and later
+      <code>UOp.range(1024, 0, AxisType.WEAK)</code>, <code>buf.index(i)</code>, <code>.store(v)</code>, <code>.end(r)</code>,
+      <code>.sink(arg=KernelInfo(...))</code>. Helpers shorten common patterns: <code>UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)</code>
+      is a <code>BUFFER</code> with its size <code>CONST</code>.</li>
+    <li><b>Tags</b> print as <code>.rtag(...)</code>. <b>dtypes</b> print in full, which is why <code>UOp.const(2.0, dtypes.weakfloat)</code>
+      is so long. In your head, read it as <code>2.0</code>.</li>
+  </ul>
+  <p>Read this way, <code>c13 = (0.0 &lt; c11).alu(Ops.WHERE, c11, 0.0)</code> is relu, and <code>c15 = c13 * 2.0</code> is the
+  final multiply. The front end built exactly what the Python said.</p>
+
+  <h2>Patterns: UPat</h2>
+  <p>A rewrite rule is a pair: a <b>pattern</b> that describes a shape of subgraph, and a <b>function</b> that receives the
+  matched pieces and returns a replacement, or <code>None</code> to decline. Patterns are <code>UPat</code> objects
+  (<a class="src" data-src="tinygrad/uop/ops.py#L1317"></a>). A UPat mirrors a UOp's fields, but each field is a constraint
+  instead of a value: <code>op</code> can be a set of ops, <code>dtype</code> a set of dtypes, <code>src</code> a tuple of
+  sub-patterns, <code>arg</code> a required value. Any field left as <code>None</code> matches anything. Give a pattern a
+  <code>name</code> and the matched UOp is passed to your function under that name.</p>
+  <p>A few constructors make patterns read like the math they match. <code>UPat.var("x")</code> matches any UOp and binds it
+  to <code>x</code>. <code>UPat.cvar("c")</code> matches any <code>CONST</code>. Python operators on UPats build ALU patterns
+  through the same mixins that build UOps, so <code>UPat.var("x") * 1</code> is a pattern for "a <code>MUL</code> of anything
+  and the constant 1". Three source forms control ordering (<a class="src" data-src="tinygrad/uop/ops.py#L1333"></a>):</p>
+  <ul>
+    <li>a <b>tuple</b> means "exactly these sources in this order";</li>
+    <li>a <b>list</b> means "these sources in any order": the UPat stores every permutation. <code>UPat.alu</code> uses a list
+      for ops in <code>GroupOp.Commutative</code>, so <code>x * 1</code> also matches <code>1 * x</code>;</li>
+    <li>a single <b>UPat</b> means "any number of sources, each matching it".</li>
+  </ul>
+  <p>Matching is a short recursive function (<a class="src" data-src="tinygrad/uop/ops.py#L1405"></a>). It checks op, name
+  binding, dtype, arg, tag and source count, then recurses into sources and returns every consistent assignment of names.
+  Binding the same name twice requires the same object: <code>store.setdefault(self.name, uop) is not uop</code>. So the
+  pattern <code>UPat.var("x") // UPat.var("x")</code> means "a value divided by <em>itself</em>", and thanks to hash-consing
+  "itself" is a pointer comparison.</p>
+  <p>Here are real rules from <code>symbolic_simple</code>, the most basic algebra in tinygrad
+  (<a class="src" data-src="tinygrad/uop/symbolic.py#L109"></a>):</p>
+  <pre class="code static" data-lang="python">
+symbolic_simple = pm_data_invalid + PatternMatcher([
+  # ** self folding **
+  (UPat({Ops.ADD, Ops.XOR, Ops.OR}, src=[UPat.var("x"), UPat.const(0)]), lambda x: x),  # x+0 / x^0 / x|0 -> x
+  (UPat({Ops.SHL, Ops.SHR}, src=(UPat.var("x"), UPat.const(0))), lambda x: x),          # x&lt;&lt;0 / x&gt;&gt;0 -> x
+  (UPat.var("x") * 1, lambda x: x),    # x*1 -> x
+  (UPat.var("x") // UPat.var("x"), lambda x: x.const_like(1)), # x//x -> 1
+  ...
+  # ** constant folding **
+  (UPat(GroupOp.Unary, src=(const_folding_pat,), name="a"), fold_const_alu),
+  (UPat(GroupOp.Binary-{Ops.THREEFRY}, src=(const_folding_pat,)*2, name="a"), fold_const_alu),
+</pre>
+  <p>The first rule uses a list, so <code>0 + x</code> matches too, and the shift rule uses a tuple because <code>0 &lt;&lt; x</code>
+  is not <code>x</code>. Constant folding hands two constants to <code>fold_const_alu</code>, which evaluates the op in Python
+  with <code>exec_alu</code> (<a class="src" data-src="tinygrad/uop/symbolic.py#L36"></a>) and returns a new <code>CONST</code>.
+  Because rules are plain Python functions, a rule can do arbitrary work and can still say no. The max-folding rule in
+  <code>symbolic</code> (<a class="src" data-src="tinygrad/uop/symbolic.py#L260"></a>) matches the shape of relu and
+  checks that the two constants agree before it commits:</p>
+  <pre class="code static" data-lang="python">
+# max folding
+((UPat.cvar("a") &lt; UPat.var("b")).where(UPat.var("b"), UPat.cvar("c")), lambda a,b,c: UOp.maximum(a,b) if a.val == c.val else None),
+</pre>
+  <p>Note the two uses of <code>"b"</code>: the value compared and the value selected must be the same UOp.
+  <code>(0 &lt; x).where(x, 0)</code> matches; <code>(0 &lt; x).where(y, 0)</code> does not.</p>
+
+  <h2>PatternMatcher</h2>
+  <p>A <code>PatternMatcher</code> is a list of (pattern, function) pairs with an index
+  (<a class="src" data-src="tinygrad/uop/ops.py#L1455"></a>). At construction it files every pattern under each op it can match,
+  in <code>pdict</code>. Rewriting one node then only looks at the patterns for that node's op
+  (<a class="src" data-src="tinygrad/uop/ops.py#L1473"></a>):</p>
+  <pre class="code static" data-lang="python">
+def rewrite(self, uop:UOp, ctx=None):
+  if len(pats:=self.pdict.get(uop.op, [])):
+    if (ler:=uop.__dict__.get('_src_ops')) is None: uop.__dict__['_src_ops'] = ler = {u.op for u in uop.src}
+    for _,match,early_reject in pats:
+      if not early_reject.issubset(ler): continue
+      if (ret:=match(uop, ctx)) is not None and ret is not uop: return ret
+  return None
+</pre>
+  <p>Three details matter in practice. <b>First match wins</b>: patterns are tried in list order and the first one that returns
+  a new UOp is used, so rule order is part of a pass's meaning. <b>Early reject</b>: each pattern knows which ops its direct
+  sources must have, and a node whose sources lack them is skipped without running the matcher. And <b>matchers compose with
+  <code>+</code></b>: <code>symbolic = symbolic_simple + commutative + PatternMatcher([...])</code>
+  (<a class="src" data-src="tinygrad/uop/symbolic.py#L228"></a>), and the scheduler pass you will meet next is
+  named after its sum, <code>symbolic+reduce_collapse+debuf</code>, an abbreviation of
+  <code>symbolic+pm_reduce_simplify+pm_const_buffer_folding+pm_remove_bufferize</code>
+  (<a class="src" data-src="tinygrad/schedule/rangeify.py#L596"></a>). By default each pattern is also compiled to specialized Python
+  the first time it is used (<code>UPAT_COMPILE</code>, <a class="src" data-src="tinygrad/uop/upat.py#L162"></a>); the behavior
+  is the same as the interpreter above, only faster.</p>
+  <p>A function can also take a <code>ctx</code> argument. <code>graph_rewrite(..., ctx=obj)</code> passes the same object to
+  every rule, which is how rules collect information (the scheduler's realize map, a list of buffers) or read configuration
+  (the renderer, in codegen).</p>
+
+  <h2>graph_rewrite</h2>
+  <p><code>PatternMatcher.rewrite</code> handles one node. <code>graph_rewrite</code> applies it to a whole graph
+  (<a class="src" data-src="tinygrad/uop/ops.py#L1744"></a>):</p>
+  <pre class="code static" data-lang="python">
+def graph_rewrite(sink:UOp, pm:PatternMatcher, ctx=None, bottom_up=False, name=None, bpm=None, walk=False, enter_calls=False) -> UOp:
+  rewrite_ctx = RewriteContext(pm if not bottom_up else None, pm if bottom_up else bpm, ctx, enter_calls)
+  return rewrite_ctx.walk_rewrite(sink) if walk else rewrite_ctx.unified_rewrite(sink)
+</pre>
+  <p>The work is in <code>unified_rewrite</code> (<a class="src" data-src="tinygrad/uop/ops.py#L1675"></a>), an explicit stack
+  machine. Python recursion would overflow on graphs with tens of thousands of nodes, so the recursion is unrolled into a
+  stack. Each node goes through up to three stages:</p>
+  <ol>
+    <li><b>Stage 0.</b> If there is a <code>bpm</code> (the matcher passed with <code>bottom_up=True</code>), apply it to the node
+      over and over until it returns nothing (a fixed point; a loop raises <code>"infinite loop in fixed_point_rewrite"</code>).
+      Then push the node's sources.</li>
+    <li><b>Stage 1.</b> When all sources have been rewritten, rebuild the node if any source changed. If none changed and there
+      is a <code>pm</code> (the default mode), try the rules on the node now.</li>
+    <li><b>Stage 2.</b> If stage 1 produced a new node, by rebuilding or by a rule, that node goes through the whole process
+      itself, and its final result becomes the result of the original node.</li>
+  </ol>
+  <p>Stage 2 is the fixed point. A rule's output is rewritten again, so rules can rely on each other: one rule reassociates
+  <code>(x*2)*3</code> into <code>x*(2*3)</code>, and constant folding then sees <code>2*3</code>. Rewriting stops only when no rule
+  matches anywhere. The <code>replace</code> dictionary memoizes results, so a shared node is rewritten once no matter how many
+  consumers it has. The names of the two modes are easy to misread, so here is the operational difference:</p>
+  <ul>
+    <li><b>Default (<code>pm</code>)</b>: a node's sources are finished before rules are tried on it. Rules see simplified inputs.
+      Symbolic simplification runs this way.</li>
+    <li><b><code>bottom_up=True</code> (<code>bpm</code>)</b>: rules are tried on a node <em>before</em> its sources, and again
+      after a rebuild. A rule can raise <code>BottomUpGate</code> to say "don't descend below here". The scheduler uses this
+      mode for passes that must see the original structure before anything below it changes, such as <code>apply rangeify</code>
+      and <code>stage to store</code>.</li>
+  </ul>
+  <p>There is also <code>walk=True</code>, a single pass with no re-traversal of rewritten subtrees
+  (<a class="src" data-src="tinygrad/uop/ops.py#L1649"></a>), and <code>enter_calls</code>, which controls whether the rewrite
+  descends into kernel bodies inside a <code>CALL</code>.</p>
+  <p>The widget below is a <b>teaching model</b>: a short JavaScript program that follows the same algorithm on an expression
+  <em>tree</em> with six real rules from <code>symbolic.py</code>. Step through each preset in both modes. The real engine works on a
+  DAG with memoization, and its patterns are richer, but the order in which rules fire is the same.</p>
+  <div id="toy-rewriter"></div>
+  <p>Some things to notice. In <code>((x*1)+0)*(3+4)</code> the default mode reaches <code>x*7</code>; the real
+  <code>symbolic</code> matcher gives the same result on the same expression (a CPU experiment:
+  <code>graph_rewrite((a*1+0)*(3+4), symbolic)</code> renders as <code>(a*7)</code>). In <code>((x*2)*3)+0</code>,
+  reassociation creates a node, <code>2*3</code>, that did not exist before, and the fixed point folds it. In the relu preset,
+  the max rule only fires because both copies of <code>y</code> are equal. In the real graph they are one node, <code>c11</code>.</p>
+
+  <h2>Real rules at work: relu becomes MAX, and back</h2>
+  <p>Passes are named <code>graph_rewrite</code> calls, and the capture harness recorded every one with the graph after it.
+  Here is the scheduler half for <code>fused_chain</code>, opened at <code>symbolic+reduce_collapse+debuf</code>
+  (<a class="src" data-src="tinygrad/schedule/rangeify.py#L596"></a>). That pass runs <code>symbolic</code> over the kernel
+  graph, and line <code>c19</code> shows the max-folding rule's work (the other green lines were only renumbered): <code>(0.0 &lt; x).alu(Ops.WHERE, x, 0.0)</code> has become
+  <code>UOp(Ops.MAX, dtypes.float, (0.0, x))</code>, and the graph shrank from 25 to 24 UOps. (A CPU experiment that logs which
+  rule returned a value during this pass for the same expression reports exactly one: <code>symbolic.py:261</code>.)</p>
+  <div class="pass-stepper" data-key="fused_chain/default" data-stages="tensor,schedule" data-start="symbolic+reduce_collapse+debuf"
+       data-title="fused_chain/default: tensor and scheduler passes"></div>
+  <p>Step back one pass to see the graph before: <code>apply rangeify</code> has already replaced the reshapes with
+  <code>c9.index(c6)</code> loads at index <code>c6 = c3*UOp.const(1024, dtypes.weakint)+c5</code>. That is the subject of Chapter 3. Here we follow
+  the <code>MAX</code>. It survives scheduling and most of codegen, and is then undone. The CUDA renderer's table of ops it can
+  print has no <code>MAX</code> (<a class="src" data-src="tinygrad/renderer/cstyle.py#L136"></a>), and codegen's
+  <code>early decompositions</code> pass adds a rule for exactly that case
+  (<a class="src" data-src="tinygrad/codegen/decomp/op.py#L88"></a>):</p>
+  <pre class="code static" data-lang="python">
+# MAX can be rewritten as CMPLT + WHERE (max function is annoying on many cstyle backends)
+if Ops.MAX not in ops and Ops.CMPLT in ops: pat.append((UPat(Ops.MAX, name="m"), lambda m: (m.src[0] &lt; m.src[1]).where(m.src[1], m.src[0])))
+</pre>
+  <p>The matcher is built from <code>ren.code_for_op.keys()</code>, so the rule set depends on the target. This is how one engine
+  serves many backends: each renderer's capabilities decide which rules are added. Step through the codegen passes of the one
+  kernel and watch the four <code>MAX</code>es (the kernel computes four floats per thread) turn back into
+  <code>(0.0&lt;x).alu(Ops.WHERE, x, 0.0)</code> at <code>early decompositions</code>:</p>
+  <div class="pass-stepper" data-key="fused_chain/default" data-kernel="0" data-stages="codegen" data-start="early decompositions"
+       data-title="fused_chain/default: codegen passes of kernel E_8192_32_4"></div>
+  <p>Why fold into <code>MAX</code> at all, if it is unfolded later? In between, symbolic rules use <code>MAX</code>'s value
+  bounds and algebra (<code>GroupOp.Idempotent</code>, <code>Associative</code>) instead of reasoning about a select.
+  The final CUDA C has <code>(0.0f&lt;alu1)?alu1:0.0f</code>, but NVRTC turns the select back into a max: the PTX already has
+  <code>max.f32</code> against <code>0f00000000</code>, which ptxas emits as one <code>FMNMX</code> (float min/max) per element, next to the <code>FFMA</code> that fused <code>a*b+c</code>.</p>
+  <div class="kernel-view" data-key="fused_chain/default" data-tabs="source,ptx,sass" data-tab="sass" data-highlight="FMNMX|FFMA"></div>
+
+  <h2>GELU: algebra by rewriting</h2>
+  <p>The GELU tensor graph is a direct transcription of the formula, including a <code>POW</code>, a
+  <code>2*sigmoid(...)-1</code> for tanh, and a stray <code>.alu(Ops.ADD, 1.0*-1.0)</code> for the subtraction:</p>
+  <pre class="code static" data-lang="uop" id="gelu-graph"></pre>
+  <p>One scheduler pass later, after <code>symbolic+reduce_collapse+debuf</code>, it has become</p>
+  <pre class="code static" data-lang="uop">
+(1.0+((x+0.044715*(x*x*x))*-2.302208198144325).exp2()).reciprocal()*x
+</pre>
+  <p>which is the identity <code>0.5·x·(1 + tanh(u)) = x·sigmoid(2u) = x / (1 + e<sup>-2u</sup>)</code>, with
+  <code>e<sup>-2u</sup></code> written as <code>exp2</code> of <code>-2 · 0.7978845608 · log<sub>2</sub>e · (x + 0.044715x³)</code>,
+  and <code>2 · 0.7978845608028654 · 1.4426950408889634 = 2.302208198...</code>. No rule knows anything about GELU or tanh. A CPU
+  experiment that logs every rule that fired during this pass (on a 4×4 input; the graph has the same structure) lists only
+  generic ones:</p>
+  <ul>
+    <li><code>x ** 3 → x*x*x</code>, <code>simplify_pow</code> (<a class="src" data-src="tinygrad/uop/symbolic.py#L176"></a>);</li>
+    <li>two-stage folding <code>(x op c1) op c2 → x op (c1 op c2)</code> (<a class="src" data-src="tinygrad/uop/symbolic.py#L267"></a>),
+      which gathers the constants of <code>1 + (2·s − 1)</code> and of the chained multiplies;</li>
+    <li>"move add/mul consts to end" (<a class="src" data-src="tinygrad/uop/symbolic.py#L280"></a>), which pulls the
+      <code>0.5</code> and the <code>2</code> together;</li>
+    <li>constant folding (<a class="src" data-src="tinygrad/uop/symbolic.py#L150"></a>): <code>1 + -1 → 0</code>,
+      <code>0.5·2 → 1</code>, and the long product of constants;</li>
+    <li>and then <code>x+0 → x</code> and <code>x*1 → x</code> (<a class="src" data-src="tinygrad/uop/symbolic.py#L111"></a>)
+      to clean up what folding left.</li>
+  </ul>
+  <p>Each rule is trivial; the fixed point does the rest. In the stepper below, step from <code>apply rangeify</code> (37 UOps)
+  to <code>symbolic+reduce_collapse+debuf</code> (26 UOps), and then on into codegen, where the constants become 32-bit floats at
+  <code>lower all index dtypes</code> (<code>0.044714998453855515</code>, <code>-2.302208185195923</code>) and the address math
+  <code>gidx0*128</code> becomes <code>gidx0&lt;&lt;7</code> at <code>late decompositions</code>.</p>
+  <div class="pass-stepper" data-key="gelu/default" data-kernel="0" data-stages="schedule,codegen" data-start="symbolic+reduce_collapse+debuf"
+       data-title="gelu/default: scheduler and codegen passes"></div>
+  <div class="kernel-view" data-key="gelu/default" data-tabs="ast,source,sass" data-tab="source" data-highlight="exp2"></div>
+  <p>The result is one elementwise kernel, <code>E_8192_32_4</code>, with one <code>exp2</code> and one reciprocal per element.
+  PyTorch's eager GELU is a hand-written CUDA functor, <code>GeluCUDAKernelImpl</code>; Inductor emits
+  <code>triton_poi_fused_gelu_0</code>. tinygrad gets a comparable kernel from a dozen generic rules.</p>
+
+  <h2>PyTorch: FX graphs and Inductor's pattern passes</h2>
+  <div class="callout torch">
+    <p>The closest PyTorch object to the tensor graph is the FX graph that Dynamo traces. Here is <code>fused_chain</code>,
+    from the same run on the L4 (PyTorch 2.14.1):</p>
+  </div>
+  <div class="torch-view" data-key="fused_chain/torch" data-tabs="fx,pre,post,output" data-tab="fx"></div>
+  <p>The comparison is instructive.</p>
+  <ul>
+    <li><b>Granularity.</b> FX nodes are ATen operators: <code>aten.mul.Tensor</code>, <code>aten.relu.default</code>. There
+      are about two thousand of them, and most have a dedicated eager kernel (many are composites of others). tinygrad's graph uses a few dozen primitive ops,
+      so <code>relu</code> is not an op at all but a <code>CMPLT</code> and a <code>WHERE</code>. Inductor still has to
+      decompose and lower ATen ops; tinygrad's front end already did.</li>
+    <li><b>Representation.</b> An FX graph is a mutable, ordered list of <code>Node</code>s with explicit users, which passes edit
+      in place. A UOp graph is immutable and hash-consed, and a pass returns a new graph.</li>
+    <li><b>One IR versus several.</b> Inductor lowers FX to its own loop-level IR: the <i>pre-fusion</i> tab shows
+      <code>ops.load</code>, <code>ops.mul</code>, <code>ops.relu</code> inside a <code>loop_body</code> over
+      <code>{p0: 1024, p1: 1024}</code>. Then it produces Triton source and hands it to Triton's compiler. tinygrad does the
+      analogous step, loops over index variables, by rewriting the same UOp graph (Chapter 3).</li>
+    <li><b>Rewrite rules.</b> Inductor also has a pattern matcher, <code>torch/_inductor/pattern_matcher.py</code>, which it uses
+      in its FX passes (for instance post-grad passes that replace subgraphs with fused or cheaper equivalents). The idea is the
+      same as <code>PatternMatcher</code>: patterns over graph nodes plus a replacement. The difference is reach. In Inductor,
+      pattern rewriting is one tool among several, while in tinygrad every pass from the tensor graph to the final instruction
+      list is a <code>graph_rewrite</code>.</li>
+  </ul>
+  <p>In the output code tab, Inductor's kernel computes relu as <code>tl.maximum(tmp5, tmp4, ...)</code>. Both compilers end
+  up at a max, by different routes.</p>
+
+  <h2>Summary</h2>
+  <ul>
+    <li>A <code>UOp</code> is <code>(op, dtype, src, arg, tag)</code>, immutable and hash-consed through
+      <code>UOpMetaClass.ucache</code>. Equal subgraphs are one object, graphs are DAGs by construction, and equality is <code>is</code>.</li>
+    <li>Tensor methods only build UOps, through three primitives (<code>alu</code>, <code>_mop</code>, <code>_rop</code>) shared
+      with <code>UOp</code> via mixins. The front end writes naive graphs on purpose.</li>
+    <li><code>pyrender</code> names a node when it has several consumers or is always rendered; the rest is inlined.</li>
+    <li>A <code>UPat</code> is a pattern with named holes, a <code>PatternMatcher</code> tries patterns indexed by op, first
+      match wins, and <code>graph_rewrite</code> applies one to a whole graph until nothing changes, either sources-first or
+      node-first (<code>bottom_up=True</code>).</li>
+    <li>The real rules are small and generic. relu becomes <code>MAX</code> through <code>symbolic.py:261</code> and is turned back
+      into a select because the CUDA renderer has no <code>MAX</code>; GELU's tanh collapses into one <code>exp2</code>
+      through folding rules alone.</li>
+  </ul>
+  <p>Next, the most important rewrite pipeline of all: how the scheduler turns a lazy graph like this into loops, decides what
+  gets a buffer, and splits the result into kernels.</p>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch02.js"></script>
+<script>BOOK.ready((B) => { const p = document.getElementById("gelu-graph"); p.innerHTML = B.codeHTML(B.get("gelu/default").tensor_graph.text, "uop"); });</script>
+</body></html>

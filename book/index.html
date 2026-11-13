@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Preface: the whole pipeline · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+  .overview { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 22px 0; overflow: hidden; }
+  .overview .ov-grid { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 0; }
+  .overview svg { width: 100%; height: auto; display: block; }
+  .ov-node rect { fill: var(--panel2); stroke: var(--line); stroke-width: 1.4; transition: all .35s; cursor: pointer; }
+  .ov-node text { fill: #c3ccd6; font: 600 11.5px var(--sans); pointer-events: none; }
+  .ov-node .sub { fill: var(--muted); font: 9.5px var(--mono); font-weight: 400; }
+  .ov-node.on rect { fill: #233247; stroke-width: 2.6; filter: drop-shadow(0 0 7px rgba(124,196,255,.45)); }
+  .ov-node.on text { fill: #fff; }
+  .ov-node.done rect { fill: #1b2634; }
+  .ov-link { stroke: #33445a; stroke-width: 2; fill: none; }
+  .ov-lane-title { fill: #fff; font: 700 12.5px var(--sans); }
+  .ov-detail { border-left: 1px solid var(--line); min-width: 0; display: flex; flex-direction: column; }
+  .ov-detail .ov-head { padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel2); font-size: 13.5px; min-height: 64px; }
+  .ov-detail .ov-head b { color: #fff; font-size: 14.5px; }
+  .ov-detail pre.code { max-height: 470px; flex: 1; transition: opacity .25s; }
+  .ov-detail pre.code.fade { opacity: 0; }
+  .ov-controls { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--panel2); font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  .chmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin: 18px 0; }
+  .chmap a { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: var(--text); transition: border-color .2s, transform .2s; }
+  .chmap a:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-2px); }
+  .chmap a b { color: #fff; display: block; margin-bottom: 4px; }
+  .chmap a span { font-size: 13.5px; color: #bcc6d1; }
+  table.caps td { font-size: 13px; } table.caps .kn code { font-size: 11.5px; }
+  @media (max-width: 1000px) { .overview .ov-grid { grid-template-columns: 1fr; } .ov-detail { border-left: 0; border-top: 1px solid var(--line); } }
+</style></head>
+<body><main>
+  <div class="kicker">Preface</div><h1>From Python to SASS</h1>
+  <p class="lede">This book follows one line of Python, <code>c = a + b</code>, and twenty other small programs, all the way down: from a tinygrad <code>Tensor</code>, through the lazy UOp graph, the scheduler, about fifty named compiler passes, CUDA C, PTX and finally the SASS machine code that an NVIDIA L4 runs. Next to each step we put what PyTorch does with the same program, both in eager mode and under <code>torch.compile</code>. Every kernel, IR dump, register count and timing in the book was recorded on a real GPU. None of it is retyped by hand.</p>
+  <div class="pipeline"></div>
+
+  <h2>What this book is</h2>
+  <p>A deep learning framework is a compiler with a Python front end. When you write <code>(a * b + c).relu()</code>, nothing is computed. You are building a description of a computation, and the framework later decides how many GPU kernels to launch, how to split the work across thousands of threads, and which machine instructions each thread runs. Most of the interesting engineering lives in that "later", and most users never see it.</p>
+  <p>tinygrad is a good framework to learn this from. The whole compiler is a few thousand lines of Python, it has no hidden C++ layer, and every lowering step is a named <code>graph_rewrite</code> pass over a single IR, the <code>UOp</code>. You can print the graph after every pass, and the book does: the <em>pass stepper</em> widgets in each chapter show the IR as it really looked after each of the 50 or so passes that ran for each example, recorded while the example compiled on the L4.</p>
+  <p>PyTorch is the comparison. Eager PyTorch launches prebuilt ATen kernels, one or more per operator. <code>torch.compile</code> uses a pipeline of several separate compilers: Dynamo, AOTAutograd, Inductor, Triton, LLVM, then NVIDIA's ptxas. Seeing the two designs side by side makes both easier to understand: they solve the same problems (fusion, tiling, vectorization, index math), but they put the solutions in different places.</p>
+  <p>The book is written for readers who know Python and roughly what a GPU is, and who want to understand how the compiler works, all the way down. Each chapter builds intuition first with an animation or a diagram, then shows the real artifact, then points at the lines of tinygrad source that produced it. The source links go to tinygrad at the exact commit the captures used, for example <a class="src" data-src="tinygrad/codegen/__init__.py#L289"></a>, where the codegen pass list starts.</p>
+
+  <h2>The whole pipeline in one picture</h2>
+  <p>Below are the two compilers, stage by stage, for <code>a + b</code> on two 1024×1024 float32 tensors. Press play, or click any stage. The panel on the right shows the real artifact at that stage, taken from the captures <code>add/default</code> and <code>add/torch</code>. Notice how the representation narrows as it goes down: from "add two tensors" to "thread 7 of block 3 loads 16 bytes at this address".</p>
+  <div class="overview" id="overview"><div class="ov-grid"><div class="ov-svg"></div><div class="ov-detail"><div class="ov-head"></div><pre class="code"></pre></div></div>
+    <div class="ov-controls"><button class="btn ov-play">▶ play</button><button class="btn ov-prev">◀</button><button class="btn ov-next">▶</button>
+      <span>Left lane: tinygrad 0.14. Right lane: PyTorch <code>torch.compile</code>. The thin lane is PyTorch eager, which runs a kernel compiled when PyTorch was built.</span></div></div>
+  <div hidden data-key="add/default"></div><div hidden data-key="add/torch"></div>
+
+  <p>Read the tinygrad lane from the top:</p>
+  <ol>
+    <li><b>Tensor → lazy UOp graph.</b> <code>a + b</code> only builds a node: <code>Tensor</code> is a thin wrapper around one <code>UOp</code> (<a class="src" data-src="tinygrad/tensor.py#L285"></a>), and arithmetic adds <code>Ops.ADD</code> over the inputs' buffers.</li>
+    <li><b>Schedule / rangeify.</b> <code>realize()</code> (<a class="src" data-src="tinygrad/tensor.py#L420"></a>) hands the graph to the scheduler. <em>Rangeify</em> gives every node explicit loop variables (<code>RANGE</code>), turns movement ops such as reshape and permute into index arithmetic, decides what fuses, and cuts the graph into kernels (<a class="src" data-src="tinygrad/schedule/rangeify.py#L585"></a>).</li>
+    <li><b>Kernel AST.</b> Each kernel is a <code>SINK</code> of <code>STORE</code>s over loops: the input to codegen.</li>
+    <li><b>Codegen passes.</b> <code>full_rewrite_to_sink</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L289"></a>) runs the optimizer, which picks <em>opts</em> such as UPCAST and LOCAL. It then runs the <em>expander</em> (loops become vectors), <em>gpudims</em> (loops become <code>blockIdx</code>/<code>threadIdx</code>), <em>devectorize</em> and memory coalescing (vectors become float4 loads), and <em>decompositions</em> (for example, integer multiplies and divides by powers of two, such as <code>×128</code>, become shifts).</li>
+    <li><b>Linearize.</b> The graph is toposorted into a flat list of uops (<a class="src" data-src="tinygrad/codegen/late/linearizer.py#L8"></a>).</li>
+    <li><b>CUDA C → NVRTC → PTX.</b> The CUDA renderer prints C (<a class="src" data-src="tinygrad/renderer/cstyle.py#L397"></a>). NVRTC compiles it to PTX, NVIDIA's virtual ISA.</li>
+    <li><b>PTX → SASS.</b> tinygrad hands the PTX to <code>cuModuleLoadData</code> (<a class="src" data-src="tinygrad/runtime/ops_cuda.py#L44"></a>), and the driver's built-in ptxas JIT-compiles it to SASS, the real machine code. To be able to show that SASS, the harness ran the same PTX through the standalone <code>ptxas</code> and <code>cuobjdump</code>.</li>
+    <li><b>cuLaunchKernel</b> (<a class="src" data-src="tinygrad/runtime/ops_cuda.py#L65"></a>) starts it: 8192 blocks of 32 threads for <code>a + b</code>.</li>
+  </ol>
+  <div class="callout torch"><p><b>PyTorch's lane.</b> Dynamo reads the Python bytecode and builds an FX graph. AOTAutograd lowers it to ATen ops (and builds the backward graph, if there is one). Inductor lowers ATen to its own loop-level IR, fuses nodes in its scheduler, and writes Python containing a Triton kernel, <code>triton_poi_fused_add_0</code>. Triton then compiles that kernel through its own MLIR dialects: TTIR, then TTGIR, which attaches a thread layout. From there it goes to LLVM IR, PTX (via LLVM's NVPTX backend) and a cubin (via ptxas). Eager mode skips all of that: <code>a + b</code> dispatches straight to <code>at::native::vectorized_elementwise_kernel&lt;4, CUDAFunctor_add&lt;float&gt;, …&gt;</code>, a template compiled into <code>libtorch_cuda.so</code> when PyTorch was built.</p></div>
+
+  <h2>How the book was made</h2>
+  <p>Everything quoted in the book was captured in one session on a Google Colab instance with an <b>NVIDIA L4</b> (Ada Lovelace, <code>sm_89</code>, 58 SMs). The software was:</p>
+  <table>
+    <tr><th>Component</th><th>Version</th></tr>
+    <tr><td>tinygrad</td><td>0.14.0, commit <code>6f87158d77f66a36d5f8bbe915170b24e2acabe8</code></td></tr>
+    <tr><td>PyTorch</td><td>2.14.1+cu130</td></tr>
+    <tr><td>Triton</td><td>3.8.0</td></tr>
+    <tr><td>NVRTC (PTX header)</td><td>"Cuda compilation tools, release 13.0, V13.0.88"; PTX <code>.version 9.0</code></td></tr>
+  </table>
+  <p>The harness lives in <code>book/harness/</code>:</p>
+  <ul>
+    <li><code>examples.py</code> defines every example: its inputs (from a seeded numpy RNG), the tinygrad expression, a numpy reference and the PyTorch version. Variants are environment settings (<code>NOOPT=1</code>, <code>BEAM=2</code>, <code>TC=0</code>, <code>TRANSCENDENTAL=2</code>, <code>DEV=CUDA:PTX</code>).</li>
+    <li><code>capture.py</code> runs one tinygrad example in a fresh process. It wraps <code>graph_rewrite</code> in every module that imports it, so it sees every named pass with its output IR. It intercepts the final <code>PROGRAM</code> to keep the uops, source and PTX. It runs <code>ptxas -v</code> and <code>cuobjdump -sass</code> on the PTX, checks the result against numpy, and times the kernels five times with <code>DEBUG=2</code>, keeping the best run. Chapter 11 walks through it.</li>
+    <li><code>capture_torch.py</code> does the same for PyTorch. It uses <code>torch.profiler</code> for eager kernel names and times, <code>TORCH_COMPILE_DEBUG=1</code> for Inductor's FX graph, IR and output code, and reads the Triton cache directory for TTIR, TTGIR, LLVM IR, PTX and cubin. SASS comes from <code>cuobjdump</code>.</li>
+    <li><code>run_all.py</code> runs every example and variant in its own process, and <code>build_data.py</code> turns <code>captures/*.json</code> into the <code>data/*.js</code> files these pages load.</li>
+  </ul>
+  <p>To re-run it on your own GPU, put <code>ptxas</code> and <code>cuobjdump</code> on <code>PATH</code> and install tinygrad at the commit above plus PyTorch with CUDA. Then run:</p>
+  <pre class="code static" data-lang="python">
+# from the book/ directory
+python harness/run_all.py captures            # all examples; or: run_all.py captures add softmax
+python harness/build_data.py                  # captures/*.json -> data/*.js
+# then open index.html in a browser (no server needed)
+</pre>
+  <div class="callout warn"><p><b>Two caveats about the numbers.</b> First, tinygrad's times come from CUDA events recorded around each launch (<a class="src" data-src="tinygrad/runtime/ops_cuda.py#L26"></a>), while PyTorch's come from the profiler's per-kernel device times. Event timing includes some launch overhead, so short tinygrad kernels look slower than their PyTorch twins for reasons that have nothing to do with code quality. Second, each benchmark reran the same inputs, and the L4 has 48 MB of L2 cache, so a 12 MB working set like <code>a + b</code> is mostly served from L2, not from DRAM. Chapter 1 works through both effects.</p></div>
+
+  <h2>The chapters</h2>
+  <div class="chmap">
+    <a href="ch01-journey.html"><b>1. The journey of a + b</b><span>One elementwise add followed through every stage, from Python to SASS and the launch, then the same add in PyTorch eager and in Triton.</span></a>
+    <a href="ch02-uops.html"><b>2. UOps and the rewrite engine</b><span>The single IR tinygrad uses everywhere, and how <code>PatternMatcher</code> plus <code>graph_rewrite</code> make up the whole compiler.</span></a>
+    <a href="ch03-scheduling.html"><b>3. Scheduling and fusion</b><span>How realize, rangeify and the bufferize cost model decide what fuses into one kernel and what gets its own buffer.</span></a>
+    <a href="ch04-movement.html"><b>4. Movement ops become index math</b><span>Reshape, permute, expand, pad and shrink never move data. They turn into integer expressions over loop variables.</span></a>
+    <a href="ch05-reductions.html"><b>5. Reductions</b><span>Sums, maxes, softmax and layernorm: register accumulators, GROUP reductions in shared memory, barriers, and split reductions.</span></a>
+    <a href="ch06-optimizer.html"><b>6. The optimizer: opts, heuristics, BEAM</b><span>UPCAST, LOCAL, UNROLL, GROUP; the hand-coded heuristic step by step; and what BEAM search finds for a matmul.</span></a>
+    <a href="ch07-tensor-cores.html"><b>7. Tensor cores</b><span>How an fp16 matmul becomes WMMA uops, inline <code>mma.sync</code> PTX and <code>HMMA.16816.F32</code> in SASS.</span></a>
+    <a href="ch08-decompositions.html"><b>8. Decompositions: exp, sin, integer math</b><span>What the backend lacks gets rewritten: hardware <code>MUFU</code> versus tinygrad's polynomial transcendentals, and shift-and-multiply integer division.</span></a>
+    <a href="ch09-rendering.html"><b>9. Rendering and compiling: CUDA C, PTX, SASS</b><span>Uops to CUDA C, NVRTC to PTX, tinygrad's own PTX renderer, and how ptxas turns either into SASS.</span></a>
+    <a href="ch10-runtime.html"><b>10. Runtime, TinyJit and autograd</b><span>Launching kernels, caching, CUDA graphs, symbolic shapes, and how a backward pass is just more UOps.</span></a>
+    <a href="ch11-toolbox.html"><b>11. Appendix: the debug toolbox</b><span>Every switch for looking inside: <code>DEBUG</code> levels, VIZ, rendering CUDA without a GPU, ptxas, cuobjdump, the PyTorch logs, and a SASS cheat sheet.</span></a>
+  </div>
+
+  <h2>Every captured example</h2>
+  <p>This table is built from <code>captures/</code>. For tinygrad, each variant shows its kernel count, total L4 time and kernel names. For PyTorch, it shows the kernel count and total time in eager mode and under <code>torch.compile</code>. Memsets are counted in the times but not in the kernel counts. Kernel names encode the launch shape; chapter 1 explains how to read them. The <code>jit</code> capture (chapter 10) has a different format and is left out.</p>
+  <table class="caps"><tr><th>Example</th><th>tinygrad: variant: kernels · time</th><th>PyTorch: kernels · time</th></tr>
+<tr><td><code>add</code></td><td><b>default</b>: 1 · 21.6 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td>eager: 1 · 7.0 µs<br>compile: 1 · 7.1 µs</td></tr>
+<tr><td><code>fused_chain</code></td><td><b>default</b>: 1 · 24.5 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td>eager: 4 · 25.0 µs<br>compile: 1 · 9.1 µs</td></tr>
+<tr><td><code>gelu</code></td><td><b>default</b>: 1 · 22.5 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td>eager: 1 · 5.5 µs<br>compile: 1 · 5.9 µs</td></tr>
+<tr><td><code>transpose</code></td><td><b>default</b>: 1 · 23.6 µs<br><span class='kn'><code>E_128_16_8_16_4</code></span></td><td>eager: 1 · 26.8 µs<br>compile: 1 · 5.2 µs</td></tr>
+<tr><td><code>broadcast_add</code></td><td><b>default</b>: 1 · 32.8 µs<br><span class='kn'><code>E_8_64_32_4_4_4</code></span></td><td>eager: 1 · 7.0 µs<br>compile: 1 · 5.4 µs</td></tr>
+<tr><td><code>pad_slice</code></td><td><b>default</b>: 1 · 67.6 µs<br><span class='kn'><code>E_251_337_2</code></span></td><td>eager: 2 · 4.5 µs<br>compile: 1 · 2.5 µs</td></tr>
+<tr><td><code>permute4d</code></td><td><b>default</b>: 1 · 22.5 µs<br><span class='kn'><code>E_32_32_2_16_8_4</code></span></td><td>eager: 1 · 7.7 µs<br>compile: 1 · 5.2 µs</td></tr>
+<tr><td><code>sum_rows</code></td><td><b>default</b>: 1 · 25.6 µs<br><span class='kn'><code>r_1024_16_64</code></span></td><td>eager: 1 · 4.9 µs<br>compile: 1 · 3.6 µs</td></tr>
+<tr><td><code>max_cols</code></td><td><b>default</b>: 1 · 33.8 µs<br><span class='kn'><code>r_1024_16_64</code></span></td><td>eager: 1 · 7.7 µs<br>compile: 2 · 5.0 µs</td></tr>
+<tr><td><code>sum_all</code></td><td><b>default</b>: 3 · 505.8 µs<br><span class='kn'><code>r_32_32_4_1024_4</code>, <code>r_256_16</code>, <code>r_16_16</code></span></td><td>eager: 1 · 264.6 µs<br>compile: 2 · 284.7 µs</td></tr>
+<tr><td><code>softmax</code></td><td><b>default</b>: 3 · 67.6 µs<br><span class='kn'><code>r_1024_16_64</code>, <code>r_1024_16_64</code>, <code>E_128_16_8_16_4</code></span></td><td>eager: 1 · 7.1 µs<br>compile: 1 · 5.9 µs</td></tr>
+<tr><td><code>layernorm</code></td><td><b>default</b>: 3 · 70.7 µs<br><span class='kn'><code>r_1024_16_64</code>, <code>r_1024_16_64</code>, <code>E_128_16_8_16_4</code></span></td><td>eager: 1 · 9.1 µs<br>compile: 1 · 6.0 µs</td></tr>
+<tr><td><code>matmul</code></td><td><b>beam2</b>: 1 · 224.3 µs<br><span class='kn'><code>r_16_8_16_8_4_4_4_256_4</code></span><br><b>default</b>: 1 · 686.1 µs<br><span class='kn'><code>r_32_16_8_16_4_4_256_4</code></span><br><b>noopt</b>: 1 · 37.24 ms<br><span class='kn'><code>r_1024_1024_1024</code></span></td><td>eager: 1 · 149.6 µs<br>compile: 1 · 149.6 µs</td></tr>
+<tr><td><code>matmul_fp16</code></td><td><b>default</b>: 1 · 527.4 µs<br><span class='kn'><code>r_32_16_32_4_2_2_4_4_128_2</code></span><br><b>no_tc</b>: 1 · 2.84 ms<br><span class='kn'><code>r_64_32_8_16_4_4_512_4</code></span></td><td>eager: 2 · 242.4 µs<br>compile: 2 · 233.6 µs</td></tr>
+<tr><td><code>exp</code></td><td><b>default</b>: 1 · 24.6 µs<br><span class='kn'><code>E_8192_32_4</code></span><br><b>transcendental2</b>: 1 · 23.6 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td>eager: 1 · 5.4 µs<br>compile: 1 · 5.1 µs</td></tr>
+<tr><td><code>sin</code></td><td><b>default</b>: 1 · 23.6 µs<br><span class='kn'><code>E_8192_32_4</code></span><br><b>transcendental2</b>: 1 · 69.6 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td>eager: 1 · 5.8 µs<br>compile: 1 · 5.8 µs</td></tr>
+<tr><td><code>int_divmod</code></td><td><b>default</b>: 1 · 22.5 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td>eager: 3 · 18.1 µs<br>compile: 1 · 5.5 µs</td></tr>
+<tr><td><code>add_ptx</code></td><td><b>cuda</b>: 1 · 22.5 µs<br><span class='kn'><code>E_8192_32_4</code></span><br><b>ptx</b>: 1 · 22.5 µs<br><span class='kn'><code>E_8192_32_4</code></span></td><td></td></tr>
+<tr><td><code>sum_rows_ptx</code></td><td><b>cuda</b>: 1 · 25.5 µs<br><span class='kn'><code>r_1024_16_64</code></span><br><b>ptx</b>: 1 · 27.6 µs<br><span class='kn'><code>r_1024_16_64</code></span></td><td></td></tr>
+<tr><td><code>matmul_ptx</code></td><td><b>cuda</b>: 1 · 684.0 µs<br><span class='kn'><code>r_32_16_8_16_4_4_256_4</code></span><br><b>ptx</b>: 1 · 690.2 µs<br><span class='kn'><code>r_32_16_8_16_4_4_256_4</code></span></td><td></td></tr>
+<tr><td><code>mlp_backward</code></td><td><b>default</b>: 2 · 108.5 µs<br><span class='kn'><code>r_8_4_8_16_4_4_128_4</code>, <code>r_8_8_8_16_4_4_64_4</code></span></td><td>eager: 7 · 35.7 µs<br>compile: 7 · 27.8 µs</td></tr>
+
+  </table>
+  <p>A few patterns are visible even before chapter 1. Every contiguous elementwise example (<code>add</code>, <code>fused_chain</code>, <code>gelu</code>, <code>exp</code>, <code>sin</code>, <code>int_divmod</code>) becomes the same launch shape, <code>E_8192_32_4</code>. Softmax and layernorm are three kernels in tinygrad and one in <code>torch.compile</code>. The fp32 matmul ranges from 37 ms with <code>NOOPT=1</code> to 224 µs with BEAM search, against 149 µs for cuBLAS.</p>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch00.js"></script></body></html>

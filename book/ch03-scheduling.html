@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3. Scheduling and fusion · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+.ch3svg { width: 100%; height: auto; display: block; }
+.ch3svg .e { stroke: #4a5a70; stroke-width: 1.6; fill: none; }
+.ch3svg .n rect { fill: var(--panel2); stroke: var(--s-tensor); stroke-width: 1.5; }
+.ch3svg .n text { fill: #e6edf3; font: 600 12px var(--mono); text-anchor: middle; }
+.ch3svg .n .sub { fill: var(--muted); font: 10px var(--mono); }
+.ch3svg .n .chip2 { fill: var(--s-schedule); font: 600 11px var(--mono); }
+.ch3svg .n.hot rect { fill: #3a2e10; stroke: #fbbf24; stroke-width: 2.5; }
+.ch3svg .n.real rect { stroke: #f87171; stroke-width: 2.5; stroke-dasharray: 5 3; }
+.ch3svg .n.recomp rect { fill: #10291f; stroke: var(--s-codegen); stroke-width: 2; }
+.ch3svg .n.buf rect { fill: #13283d; stroke: var(--s-schedule); stroke-width: 2.5; }
+.ch3svg .box rect { fill: rgba(96,165,250,.06); stroke: var(--s-schedule); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.ch3svg .box.stage rect { fill: rgba(248,113,113,.08); stroke: #f87171; }
+.ch3svg .box.kern rect { stroke-dasharray: none; stroke-width: 2; }
+.ch3svg .box.k0 rect { stroke: #fbbf24; fill: rgba(251,191,36,.05); } .ch3svg .box.k1 rect { stroke: #34d399; fill: rgba(52,211,153,.05); } .ch3svg .box.k2 rect { stroke: #c084fc; fill: rgba(192,132,252,.05); }
+.ch3svg .box text { fill: #e6edf3; font: 600 12px var(--sans); } .ch3svg .box .bsub { fill: var(--muted); font: 11px var(--mono); }
+.rg-cap { padding: 10px 14px; color: #c3ccd6; font-size: 14px; min-height: 4.6em; border-top: 1px solid var(--line); }
+.rg-code { font-size: 12px; max-height: 260px; border-top: 1px solid var(--line); }
+.pm-tree { font-size: 13px; }
+.pm-item { margin-left: 16px; border-left: 1px dashed #33445a; padding-left: 8px; }
+.pm-tree > .pm-item { margin-left: 0; }
+.pm-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 3px 4px; border-radius: 5px; }
+.pm-item.pass > .pm-line { cursor: pointer; } .pm-item.pass > .pm-line:hover, .pm-line.sel { background: #1f2a38; }
+.pm-item.fn > .pm-line b, .pm-item.grp > .pm-line b { color: var(--accent); font-weight: 600; }
+.pm-item.grp > .pm-line b { color: #fbbf24; }
+.pm-item.note i { color: var(--muted); }
+.pm-line a.src { font-size: 11px; color: #6f8fb0; }
+.pm-bar { display: inline-block; width: 90px; height: 8px; background: #0a0e14; border-radius: 4px; overflow: hidden; }
+.pm-bar i { display: block; height: 100%; background: var(--s-schedule); }
+.pm-ms, .pm-nodes, .pm-ord { font: 11.5px var(--mono); color: var(--muted); }
+.pm-desc { padding: 8px 14px 12px; border-top: 1px solid var(--line); font-size: 13.5px; color: #c3ccd6; }
+#traffic svg .dram { fill: #10161e; stroke: var(--line); } #traffic svg .sm { fill: #10161e; stroke: var(--s-codegen); }
+#traffic svg .lbl { fill: var(--muted); font: 12px var(--sans); }
+#traffic svg .kn { fill: #fff; font: 600 12px var(--mono); text-anchor: middle; }
+#traffic svg .slot { fill: #1c2430; stroke: #33445a; transition: fill .2s; } #traffic svg .slot.empty { fill: none; stroke-dasharray: 4 3; }
+#traffic svg .slot.rd { fill: #13283d; stroke: var(--s-schedule); } #traffic svg .slot.wr { fill: #3a2e10; stroke: #fbbf24; }
+#traffic svg .slab { fill: #e6edf3; font: 12px var(--mono); dominant-baseline: middle; } #traffic svg .ssz { fill: var(--muted); font: 11px var(--mono); text-anchor: end; dominant-baseline: middle; }
+#traffic svg .pr { fill: var(--s-schedule); } #traffic svg .pw { fill: #fbbf24; }
+#traffic svg .cnt { fill: #e6edf3; font: 13px var(--mono); }
+.tr-bars .row.sel span:first-child { color: #fff; font-weight: 600; }
+.tr-bars .bars .row { grid-template-columns: 210px 1fr 170px; }
+.tr-note { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 3</div><h1>Scheduling and fusion</h1>
+  <p class="lede">A tinygrad expression builds a lazy graph and nothing runs. When you call <code>.realize()</code>, the
+  scheduler turns that graph into a list of kernels. It has to decide which intermediate values get written to memory and
+  which are recomputed inside their consumers. This chapter follows every scheduler pass in order, explains
+  <em>rangeify</em>, the step that turns whole-tensor ops into loops over index variables, and uses it to explain why
+  <code>((a*b+c).relu()*2)</code> is one kernel while <code>softmax</code> is three, and what PyTorch's Inductor does
+  differently.</p>
+  <div class="pipeline" data-active="schedule"></div>
+
+  <h2>Why fusion is the first optimization</h2>
+  <p>On a GPU, an elementwise op on a large tensor does almost no arithmetic per byte it touches. <code>a*b</code> on two
+  1024×1024 float32 tensors reads 8 MiB and writes 4 MiB to do one million multiplies. The SMs finish the math long before
+  memory can deliver the operands. Such an op is <em>memory-bound</em>, and its run time is set by the bytes it moves.</p>
+  <p>Run <code>((a*b + c).relu() * 2.0)</code> one op at a time, as PyTorch's eager mode does, and each op is its own kernel
+  that reads its inputs from global memory and writes its result back. The three temporaries (<code>a*b</code>,
+  <code>+c</code>, <code>relu</code>) each make a full round trip. A <em>fused</em> kernel reads <code>a</code>, <code>b</code>,
+  <code>c</code> once, keeps every intermediate in registers, and writes the result once. Press run, and pick other scenarios
+  from the menu:</p>
+  <div id="traffic"></div>
+  <p>The byte counts follow from the shapes: 40 MiB for eager against 16 MiB fused. That is the whole case for fusion,
+  and it is why a compiler for tensor programs spends its first stage deciding kernel boundaries. Here are the measured times
+  from the L4:</p>
+  <div class="bars" data-keys="fused_chain/torch:eager,fused_chain/default,fused_chain/torch:inductor" data-labels="PyTorch eager (4 kernels)|tinygrad (1 kernel)|torch.compile / Triton (1 kernel)"
+       data-title="fused_chain on the L4: sum of kernel times"></div>
+  <div class="callout warn">
+    <p>Read these times with care. The four eager kernels took 6.94, 7.33, 5.31 and 5.38 µs (torch.profiler device time),
+    Inductor's <code>triton_poi_fused_add_mul_relu_0</code> 9.06 µs, and tinygrad's <code>E_8192_32_4</code> 24.54 µs (tinygrad's
+    <code>DEBUG=2</code> timer, which wraps one launch in CUDA events). The two harnesses measure differently, and the working set
+    (16 to 28 MiB) fits in the L4's 48 MB L2 cache, so none of these runs is limited by DRAM. The fair comparison is inside one
+    tool: eager's four kernels add up to 25 µs, against 9 µs for the same work fused by Inductor. Chapters 6 and 10 return to
+    tinygrad's absolute numbers.</p>
+  </div>
+  <div class="torch-view" data-key="fused_chain/torch" data-tabs="eager,output" data-tab="eager"></div>
+
+  <h2>From realize() to a list of kernels</h2>
+  <p><code>Tensor.realize()</code> (<a class="src" data-src="tinygrad/tensor.py#L420"></a>) calls <code>linear_with_vars</code>
+  (<a class="src" data-src="tinygrad/tensor.py#L404"></a>), which does two things: <b>callify</b> the tensor graph
+  (<code>transform_to_call</code>, <a class="src" data-src="tinygrad/tensor.py#L224"></a>), then <b>schedule</b> it
+  (<code>create_linear_with_vars</code>, <a class="src" data-src="tinygrad/schedule/__init__.py#L181"></a>). The result is a
+  <code>LINEAR</code> UOp, an ordered list of <code>CALL</code>s, one per kernel, which <code>run_linear</code> compiles and launches.
+  Every step in between is a named <code>graph_rewrite</code>. The map below shows each one where it is called, with the time and
+  graph size the capture recorded for <code>softmax</code>:</p>
+  <div id="pass-map"></div>
+  <p>In order, as the harness recorded them for every example: <code>number the uops</code>, <code>early transform tensor graph</code>,
+  <code>finalize call</code>, <code>replace bufs</code>, then <code>multi_pm</code>, <code>earliest rewrites</code>,
+  <code>convert copy to store</code>, <code>get realize</code>, <code>apply rangeify</code>, <code>add device to deviceless</code>,
+  <code>symbolic+reduce_collapse+debuf</code>, <code>limit buffers</code>, <code>stage to store</code>, one <code>kernel split</code>
+  per kernel, <code>split kernels</code>, <code>remove indexing from call args</code>, <code>schedule to linear</code>,
+  <code>params to buffers</code>, <code>resolve linear call</code> and <code>create COPY kernels for SDMA</code>. Small helper rewrites
+  named <code>reshape</code> and <code>minimum_valid</code> also appear: rangeify calls them to simplify index expressions.</p>
+
+  <h3>Callify: a reusable function</h3>
+  <p>The first four passes rewrite the user's graph into a self-contained function. <code>number the uops</code> tags the nodes
+  that must end up in memory (the realize targets; you saw its <code>.rtag((0,))</code> in Chapter 2).
+  <code>early transform tensor graph</code> turns each tagged node into a store into a fresh buffer:
+  <code>buf.after(buf.store(value))</code>. <code>finalize call</code> records which Tensor will become which buffer.
+  <code>replace bufs</code> replaces every concrete <code>BUFFER</code> with a numbered <code>PARAM</code> and wraps the graph in
+  a <code>CALL</code> whose arguments are the real buffers. After it, the <code>fused_chain</code> graph reads
+  <code>c4.after(c4.store(c17))</code> with <code>PARAM</code> 0 as the output and <code>PARAM</code>s 1 to 3 as inputs.</p>
+  <p>Why the PARAMs? The schedule is cached on the function's <code>key</code> (<code>lower_sink_to_linear</code>,
+  <a class="src" data-src="tinygrad/schedule/__init__.py#L119"></a>). With buffers abstracted, a training step that runs the same
+  graph on new data every iteration hits the cache, and none of the passes below runs again.</p>
+
+  <h3>Schedule: get_kernel_graph</h3>
+  <p>On a cache miss, <code>get_kernel_graph</code> (<a class="src" data-src="tinygrad/schedule/rangeify.py#L585"></a>) runs the
+  real work. Its steps, in source order:</p>
+  <pre class="code static" data-lang="python">
+tsink = graph_rewrite(sink, multi_pm, name="multi_pm")                    # multi-device; no-op on one GPU
+tsink = graph_rewrite(tsink, pm_mops+earliest_rewrites, bottom_up=True, name="earliest rewrites")
+tsink = graph_rewrite(tsink, pm_copy_to_store, ..., name="convert copy to store")
+tsink = run_rangeify(tsink, bool(DEBUG_RANGEIFY))                          # get realize, apply rangeify, ...
+tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_const_buffer_folding+pm_remove_bufferize,
+                      name="symbolic+reduce_collapse+debuf")
+tsink = graph_rewrite(tsink, pm_limit_bufs, ..., name="limit buffers")
+tsink = graph_rewrite(tsink, pm_add_buffers+pm_add_param_range_tags, ..., bottom_up=True, name="stage to store")
+tsink = graph_rewrite(tsink, split_kernels, bottom_up=True, name="split kernels")
+tsink = graph_rewrite(tsink, pm_no_indexing_calls, name="remove indexing from call args")
+</pre>
+  <p><code>earliest rewrites</code> folds chains of movement ops and, among other things, splits very large reductions in two
+  (<code>split_reduceop</code>, <a class="src" data-src="tinygrad/schedule/rangeify.py#L71"></a>), which Chapter 5 covers. The
+  middle three steps are where fusion is decided, and the rest of this chapter is about them. After
+  <code>get_kernel_graph</code>, <code>create_schedule</code> (<a class="src" data-src="tinygrad/schedule/__init__.py#L28"></a>)
+  orders the kernels: it is not a rewrite but a topological sort over the <code>AFTER</code> edges that connect a kernel that
+  writes a buffer to the kernels that read it.</p>
+
+  <h2>Rangeify: from tensors to loops</h2>
+  <p>The tensor graph speaks in whole tensors: "reshape this", "reduce that over axis 1". Kernels speak in loops: "for every
+  row r0 and column r1, load <code>x[r0*1024 + r1]</code>". Rangeify is the translation. Every node gets a tuple of
+  <code>RANGE</code> UOps, one loop variable per axis of its shape, and then the graph is rewritten so each value is an expression
+  over those variables.</p>
+  <p>Ranges flow <b>backwards</b>, from consumers to producers. <code>run_rangeify</code>
+  (<a class="src" data-src="tinygrad/schedule/indexing.py#L188"></a>) builds a consumer map and walks the nodes in reverse
+  toposort order, so every node is visited after all of its consumers. The comment at the heart of the walk states the rule
+  (<a class="src" data-src="tinygrad/schedule/indexing.py#L223"></a>):</p>
+  <pre class="code static" data-lang="python">
+# *** the ranges on the output are
+#  1. new if this op is realized
+#  2. from the single consumer if this op only has one consumer
+#  3. potentially new if this op has 2+ consumers
+</pre>
+  <p>Case 2 <em>is</em> fusion. A node with one consumer uses the consumer's loop variables, which means it is computed
+  inside the consumer's loop, so it needs no buffer. Case 1 starts a new loop nest: the node's value is materialized and
+  consumers read it back. Case 3 checks whether all consumers index the node the same way. If they do, the node can still share
+  their loops; if not, every axis gets a new range and the node is realized (with <code>PCONTIG</code> set, only the mismatched axes).</p>
+  <p>Movement ops don't move data; they transform index tuples. <code>apply_movement_op</code>
+  (<a class="src" data-src="tinygrad/schedule/indexing.py#L169"></a>) is the definition: a <code>PERMUTE</code> reorders the
+  ranges, a <code>SHRINK</code> adds an offset, an <code>EXPAND</code> drops the range of a broadcast axis, a <code>PAD</code>
+  adds a validity condition, and a <code>RESHAPE</code> flattens the ranges with strides and splits them again with
+  <code>//</code> and <code>%</code>, which symbolic simplification then cleans up. Chapter 4 is about this arithmetic. For
+  scheduling it is enough to know that after rangeify there are no movement ops left, only index expressions.</p>
+  <p>Here is the walk for softmax, with the range numbers from the captured IR. Each step shows which nodes got which ranges,
+  in a simplified version of the format tinygrad prints with <code>DEBUG_RANGEIFY=1</code> (<code>***</code> marks realized nodes; the columns are number
+  of consumers, op, shape, ranges; the real output also has a column for the number of ending ranges):</p>
+  <div id="rangeify-anim"></div>
+
+  <h3>When a reduce forces a kernel boundary</h3>
+  <p>Look at steps 4 and 6 again. <code>x.max(-1, keepdim=True)</code> produces one value per row, and <code>x - max</code> broadcasts it
+  back across the row. To produce element <code>[r4, r5]</code>, the consumer needs the max of row r4, and that max is itself a
+  loop over every column. If the max were fused into the consumer's loop, every element would recompute its row's max: 1024 reads
+  per element instead of one. The scheduler detects this pattern explicitly. While walking, it tracks <em>ending ranges</em>:
+  ranges a consumer iterates that this node is broadcast over (<a class="src" data-src="tinygrad/schedule/indexing.py#L215"></a>):</p>
+  <pre class="code static" data-lang="python">
+ending_ranges[x] = sum([ending_ranges.get(u, []) for u in consumer_map[x]], [])
+# ranges the consumers iterate that this node broadcasts over
+ended = [rctx.range_map[c][0][i] for c in consumer_map[x] if c in rctx.range_map and c.op in GroupOp.Broadcastable
+         for i in broadcast_axes(x.shape, c.shape)]
+broadcast_ending_ranges = list(UOp.sink(*ended).ranges)
+# fusion decision: REDUCE before the broadcast
+if x.op is Ops.REDUCE: ending_ranges[x] += broadcast_ending_ranges
+</pre>
+  <p>and then, if a <code>REDUCE</code> (or elementwise op) has non-empty ending ranges, its output axes are realized with new
+  ranges (<a class="src" data-src="tinygrad/schedule/indexing.py#L270"></a>). That is the rule that splits softmax: the max is
+  broadcast back over the reduced axis, so it is realized; so is the sum. Layernorm has the same shape, with mean and variance in
+  place of max and sum. A reduce whose result is <em>not</em> broadcast back, like <code>a.exp().sum(1)</code>, fuses with what
+  feeds it into one kernel.</p>
+
+  <h3>STAGE, then the cost model</h3>
+  <p><code>apply rangeify</code> (<a class="src" data-src="tinygrad/schedule/indexing.py#L320"></a>, a bottom-up rewrite with
+  the range map as <code>ctx</code>) materializes these decisions. Buffers and PARAMs are read with <code>.index(...)</code>, a
+  <code>REDUCE</code> gets explicit reduce ranges, movement ops are deleted, and every realized value is wrapped in a
+  <code>STAGE</code> (the comments still call it BUFFERIZE): "materialize this value over these closed ranges". For softmax that
+  is five materialization points: the input, the max, the exp, the sum, and the output STORE.</p>
+  <p>The realize map is deliberately generous, and the next pass trims it. <code>symbolic+reduce_collapse+debuf</code> includes
+  <code>remove_bufferize</code> (<a class="src" data-src="tinygrad/schedule/rangeify.py#L221"></a>), a small cost model that decides
+  per STAGE whether to keep it or to substitute the consumer's indices into the STAGE's source, inlining and recomputing it. A STAGE
+  stays if the user asked for it (<code>.contiguous()</code>), if its source reads more than three buffers, or if <b>any reduce
+  inside it reads a buffer</b> (<a class="src" data-src="tinygrad/schedule/rangeify.py#L256"></a>,
+  <a class="src" data-src="tinygrad/schedule/rangeify.py#L259"></a>). Otherwise it is removed. For softmax, the input STAGE and
+  the exp STAGE contain no reduce, so they go: exp is recomputed in both the sum kernel and the final kernel, which is cheaper than
+  writing and re-reading a 4 MiB intermediate. The max and sum STAGEs each wrap a reduce over the input, so they stay.</p>
+  <p><code>stage to store</code> (<code>bufferize_to_store</code>, <a class="src" data-src="tinygrad/schedule/rangeify.py#L392"></a>)
+  turns each surviving STAGE into a <code>BUFFER</code>, a <code>STORE</code> into it, an <code>END</code> that closes the loops,
+  and an <code>AFTER</code> that readers go through. Finally, <code>split kernels</code> cuts the graph at each <code>STORE</code> or
+  <code>END</code> with no open ranges (<code>split_store</code>, <a class="src" data-src="tinygrad/schedule/rangeify.py#L547"></a>):
+  each becomes a <code>SINK</code> with <code>KernelInfo</code>, wrapped in a <code>CALL</code> whose arguments are its buffers.
+  Inside, a local <code>kernel split</code> rewrite renumbers PARAMs and ranges from 0, so identical kernels hash the same and are
+  compiled once.</p>
+  <p>Step through the real passes. Start at <code>apply rangeify</code> (44 UOps, with four <code>STAGE</code>s), then
+  <code>symbolic+reduce_collapse+debuf</code> (two STAGEs left), <code>stage to store</code> (two <code>UOp.new_buffer('CUDA', 1024, ...)</code>
+  lines appear) and the three <code>kernel split</code>s:</p>
+  <div class="pass-stepper" data-key="softmax/default" data-stages="tensor,schedule" data-start="apply rangeify"
+       data-title="softmax/default: tensor and scheduler passes"></div>
+
+  <h2>The three softmax kernels</h2>
+  <p>These are the kernel ASTs handed to codegen, one per <code>CALL</code>, with what the L4 did with them:</p>
+  <div class="kernel-view" data-key="softmax/default" data-kernel="0" data-tabs="ast,source" data-tab="ast" data-highlight="reduce" data-title="kernel 0: the row max"></div>
+  <div class="kernel-view" data-key="softmax/default" data-kernel="1" data-tabs="ast,source" data-tab="ast" data-highlight="exp2|reduce" data-title="kernel 1: sum of exp, with exp recomputed from x and the max"></div>
+  <div class="kernel-view" data-key="softmax/default" data-kernel="2" data-tabs="ast,source" data-tab="ast" data-highlight="exp2|reciprocal" data-title="kernel 2: exp again, times 1/sum"></div>
+  <p>Kernels 0 and 1 are both named <code>r_1024_16_64</code>: a reduction (<code>r</code>) with 1024 blocks of 16 threads, each
+  thread covering 64 elements of its row (the <code>GROUPTOP</code> opt; Chapter 5). Kernel 2 is elementwise
+  (<code>E_128_16_8_16_4</code>). Kernel 1 reads <code>PARAM 2</code>, the 1024 maxes written by kernel 0, and kernel 2 reads both
+  1024-float vectors plus <code>x</code> again. Each of the three passes over <code>x</code> reads 4 MiB, so softmax moves about
+  16 MiB; the per-kernel <code>estimates.mem</code> codegen computed (4,198,400, 4,202,496 and 8,396,800 bytes) match the shape
+  arithmetic exactly. Layernorm has the same structure: a mean kernel, a variance kernel that stores
+  <code>sqrt(var + 1e-5)</code>, and an elementwise normalize.</p>
+  <div class="bars" data-keys="softmax/default,softmax/torch:eager,softmax/torch:inductor,layernorm/default,layernorm/torch:eager,layernorm/torch:inductor"
+       data-labels="softmax · tinygrad (3)|softmax · eager (1)|softmax · Inductor (1)|layernorm · tinygrad (3)|layernorm · eager (1)|layernorm · Inductor (1)"
+       data-title="softmax and layernorm on the L4: sum of kernel times (number of kernels in parentheses)"></div>
+  <p>The same caveats about timing apply. The structural difference is visible anyway: one kernel against three.</p>
+
+  <h2>What PyTorch does differently</h2>
+  <div class="callout torch">
+    <p>Eager PyTorch runs softmax as one hand-written kernel, <code>softmax_warp_forward&lt;float, float, float, 10, ...&gt;</code>
+    (7.07 µs). For rows of up to 1024 elements it gives each row to a warp, which keeps the row in registers, computes the max
+    and the sum with warp shuffles, and writes the result: one read of <code>x</code>, one write. Layernorm likewise has
+    <code>vectorized_layer_norm_kernel</code> (9.09 µs).</p>
+  </div>
+  <p>Inductor generates a single fused kernel too, <code>triton_per_fused__softmax_prepare_softmax_online_0</code> (5.86 µs). Its
+  pre-fusion IR has three scheduler nodes, two reductions and a pointwise op, much like tinygrad's three kernels. The first two
+  carry one reduction, <code>'online_softmax_reduce'</code>, which yields both the max and the sum. Inductor's scheduler then fuses
+  all three into one <code>FusedSchedulerNode</code>. The <code>per</code> in the name means a <em>persistent</em> reduction:
+  the whole reduced dimension fits in one block, so the kernel loads a row once into registers (<code>R0_BLOCK = 1024</code>),
+  reduces it twice, and computes the outputs from the values it already holds.</p>
+  <div class="torch-view" data-key="softmax/torch" data-tabs="eager,fx,pre,post,output,ttgir,sass" data-tab="output" data-highlight="tl\.load|tl\.store|fmax2|tl\.sum|libdevice\.exp"></div>
+  <p>Note what the persistent kernel does and does not avoid. It still computes <code>exp</code> twice (<code>tmp8</code> and
+  <code>tmp14</code>), just as tinygrad recomputes it. What it avoids is the <em>broadcast boundary</em>: the max and sum never
+  leave the block, so they need no global buffer, and <code>x</code> is read once instead of three times. tinygrad's rangeify
+  sees a reduce broadcast back over its own axis and cuts there, because in its model a value that every element of a row needs
+  must be complete before the row is read again. Getting from three kernels to one needs the knowledge that a row fits in
+  registers or shared memory, which is a codegen fact, not a graph fact. tinygrad's scheduler has hooks in this direction
+  (the <code>PCONTIG</code> setting allows partial, LOCAL-memory stages in <code>remove_bufferize</code>), but at the captured
+  commit the default is the three-kernel schedule you see here.</p>
+  <p>For elementwise chains the two compilers agree. <code>gelu</code> is one tinygrad kernel (<code>E_8192_32_4</code>) and one
+  Inductor kernel (<code>triton_poi_fused_gelu_0</code>), and <code>fused_chain</code> is one kernel in both, against four in eager mode.</p>
+
+  <h2>Fusion rules, tested</h2>
+  <p>To check the rules above, here is a CPU experiment with tinygrad 0.14 (<code>DEV=CPU</code>, 64×64 tensors), counting the
+  kernels in each schedule. The scheduler is the same code on every device; only kernel names and launch shapes differ.</p>
+  <table>
+    <tr><th>expression</th><th>kernels</th><th>why</th></tr>
+    <tr><td><code>((a*b+c).relu()*2)</code></td><td>1</td><td>every node has one consumer: rule 2 all the way</td></tr>
+    <tr><td><code>a.exp().sum(1)</code></td><td>1</td><td>the exp feeds a reduce whose result is not broadcast back</td></tr>
+    <tr><td><code>a.sum(1, keepdim=True) + a</code></td><td>2</td><td>reduce before a broadcast: realized</td></tr>
+    <tr><td><code>a.softmax(-1)</code></td><td>3</td><td>two reduces broadcast back</td></tr>
+    <tr><td><code>d = a+1; d + d.T</code></td><td>1</td><td><code>d</code> has two consumers that index it differently, but it reads one buffer and has no reduce, so <code>remove_bufferize</code> recomputes it</td></tr>
+    <tr><td><code>c = a+b; realize(c.sum(1), c*2)</code></td><td>2</td><td>two outputs; <code>c</code> is recomputed in both kernels</td></tr>
+    <tr><td><code>s = a.sum(1); realize(s*2, s+1)</code></td><td>3</td><td>the STAGE of <code>s</code> wraps a reduce over a buffer, so it is kept</td></tr>
+    <tr><td><code>(a+1).contiguous()*2</code></td><td>2</td><td>a user <code>.contiguous()</code> is never removed</td></tr>
+  </table>
+  <p>Two more limits can split kernels. <code>limit buffers</code> (<a class="src" data-src="tinygrad/schedule/rangeify.py#L600"></a>)
+  splits a kernel that would read more buffers than the device allows; the table lists Metal, WebGPU and CPU but not CUDA, so on
+  the L4 it never fires unless you set <code>MAX_KERNEL_BUFFERS</code>. And <code>split_reduceop</code> splits a reduction whose
+  input is at least 32768 times larger than its output into two kernels for parallelism: the <code>sum_all</code> capture
+  (a 4096×4096 sum) runs as <code>r_32_32_4_1024_4</code>, <code>r_256_16</code> and <code>r_16_16</code>, which Chapter 5 explains.</p>
+
+  <h2>Summary</h2>
+  <ul>
+    <li><code>realize()</code> callifies the graph (buffers become PARAMs, so schedules are cached), then
+      <code>get_kernel_graph</code> runs rangeify, the cost model, buffer creation and kernel splitting, and
+      <code>create_schedule</code> orders the kernels by their <code>AFTER</code> edges.</li>
+    <li>Rangeify gives every node loop variables, flowing from consumers to producers. A single consumer means shared loops,
+      which is fusion. Realized nodes get new loops and a <code>STAGE</code>; movement ops become index math and disappear.</li>
+    <li>A reduce whose result is broadcast back over the axes its consumer iterates is realized: this is why softmax and layernorm
+      are three kernels in tinygrad.</li>
+    <li><code>remove_bufferize</code> undoes realizations that are cheap to recompute (no reduce over a buffer, at most three buffers);
+      surviving STAGEs become <code>BUFFER</code> + <code>STORE</code> + <code>END</code> + <code>AFTER</code>, and each closed store is a kernel.</li>
+    <li>Inductor fuses softmax into one persistent-reduction kernel that keeps each row on chip; eager PyTorch has a hand-written
+      warp-per-row kernel. Both read <code>x</code> once. For elementwise chains, tinygrad and Inductor both produce one kernel.</li>
+  </ul>
+  <p>Next: what exactly rangeify does to the indices of permutes, pads and slices.</p>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch03.js"></script></body></html>

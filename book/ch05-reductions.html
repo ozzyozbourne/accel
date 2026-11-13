@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>5. Reductions · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+  .kn-t td, .kn-t th { border-color: #243041; }
+  .kn-k { font: 700 15px var(--mono); color: #fff; margin-right: 6px; }
+  .kn-ax { display: inline-flex; flex-direction: column; align-items: center; border: 1.5px solid; border-radius: 6px; padding: 1px 7px; margin: 0 3px; line-height: 1.2; }
+  .kn-ax b { font: 700 14px var(--mono); } .kn-ax i { font: 10px var(--sans); font-style: normal; opacity: .85; }
+  .rt-phase { font-size: 14px; margin-bottom: 6px; min-height: 2.6em; }
+  .rt-svg svg text { font: 11px var(--mono); fill: #d7dde5; text-anchor: middle; }
+  .rt-svg .rt-l { text-anchor: start; font: 600 12px var(--sans); fill: #8b97a6; }
+  .rt-in { fill: #1c2430; } .rt-in.done { fill: #2f4a66; } .rt-in.now { fill: var(--s-schedule); }
+  .rt-acc rect { fill: #143323; stroke: var(--s-codegen); transition: opacity .3s; } .rt-acc.dead { opacity: .18; }
+  .rt-acc.fin rect { fill: #10161e; stroke: #33445a; } .rt-acc.fin.on rect { fill: #143323; stroke: var(--s-codegen); }
+  .rt-tid { fill: #8b97a6 !important; font-size: 10px !important; }
+  .rt-sm rect { fill: #10161e; stroke: #2a3441; } .rt-sm.on rect { fill: #0f3640; stroke: #22d3ee; }
+  .rt-sm.now rect { fill: #22d3ee; } .rt-sm.now text { fill: #07121d; } .rt-sm.used { opacity: .45; }
+  .rt-bar { stroke: #33445a; stroke-width: 2; stroke-dasharray: 6 4; } .rt-bar.on { stroke: #f87171; stroke-width: 3; }
+  .rt-arrow { fill: none; stroke: #fbbf24; stroke-width: 1.6; } .rt-arrow.tree { stroke: #c084fc; opacity: .8; }
+  .rt-out rect { fill: #10161e; stroke: #33445a; } .rt-out.on rect { fill: #3a2a10; stroke: #fbbf24; }
+  .rt-src { border-top: 1px solid var(--line); max-height: 330px; }
+  .sp-txt { font-size: 14px; min-height: 2.8em; margin-bottom: 6px; }
+  .sp-svg .sp-l { font: 600 12px var(--sans); fill: #8b97a6; }
+  .sp-mat { fill: #10161e; stroke: #33445a; } .sp-sweep { stroke: #fff; stroke-width: 2; }
+  .sp-ar { stroke: #55606e; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+  .sp-final { fill: #10161e; stroke: #33445a; } .sp-final.on { fill: var(--s-render); stroke: #fff; }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 5</div><h1>Reductions</h1>
+  <p class="lede">A reduction collapses an axis: every output needs many inputs. That makes it the first operation where threads
+  must cooperate. This chapter follows <code>sum(1)</code>, <code>max(0)</code> and a full <code>sum()</code> of 16M floats from
+  the <code>REDUCE</code> UOp to register accumulators, shared memory, <code>__syncthreads()</code> and finally <code>BAR.SYNC</code>,
+  <code>STS</code> and <code>LDS</code> in SASS. Along the way it explains why tinygrad turns one <code>a.sum()</code> into three
+  kernels, what a name like <code>r_32_32_4_1024_4</code> means, and how PyTorch's reduce kernels compare.</p>
+  <div class="pipeline" data-active="schedule,codegen"></div>
+
+  <h2>REDUCE in the tensor graph</h2>
+  <p>Every reduction in tinygrad (<code>sum</code>, <code>max</code>, <code>prod</code>, and everything built on them such as
+  <code>mean</code>, <code>softmax</code> and matmul) ends up in <code>UOp._rop</code>
+  <a class="src" data-src="tinygrad/uop/ops.py#L629"></a>. It permutes the reduced axes to the <em>front</em> and emits
+  <code>REDUCE(src, arg=(op, n_reduced_axes))</code>, where <code>op</code> is ADD, MUL or MAX. For <code>a.sum(1)</code> on a
+  1024×1024 input, the reduced axis is the last one, so the graph gets a <code>PERMUTE (1, 0)</code> in front of the REDUCE:</p>
+  <div class="tg-graph" data-key="sum_rows/default" data-highlight="_rop"></div>
+  <p>Chapter 4 showed that a PERMUTE is free. It only reorders ranges. Rangeify gives the REDUCE a fresh
+  <code>AxisType.REDUCE</code> range for the reduced axis and passes the output range (<code>WEAK</code>, an ordinary loop axis)
+  through. The kernel AST that codegen receives is short:</p>
+  <div class="kernel-view" data-key="sum_rows/default" data-tabs="ast" data-tab="ast" data-highlight="REDUCE|reduce"></div>
+  <p>Read it as a loop nest: for every output row <code>c2</code> (1024 of them), reduce over <code>c7</code> (1024 of them)
+  the value at <code>c2*1024 + c7</code>, then store at <code>c2</code>. <code>max(0)</code> is the same with MAX and the
+  index transposed, <code>c6*1024 + c2</code>: it reduces down a column. Everything interesting happens in codegen, where this loop
+  nest has to be spread over threads.</p>
+
+  <h2>The optimizer's choice: GROUPTOP</h2>
+  <p>A reduction kernel has two kinds of parallelism. Output elements are independent, so they can go to different threads
+  freely. The reduced elements of one output can also be split across threads, but then the threads have to combine their
+  partial results, which takes shared memory and a barrier. tinygrad's heuristic (Chapter 6 covers it fully) decides with one rule
+  <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L80"></a>:</p>
+<pre class="code static" data-lang="python">
+  # are we grouping? (requires local shape support)
+  if resolve(prod(k.output_shape[i] for i in k.upcastable_dims) &lt;= (240 if NOLOCALS else 2048), False):
+    for axis, sz in itertools.product((0, 1, 2), (16,)):
+      try:
+        k.apply_opt(Opt(OptOps.GROUPTOP, axis, sz))
+        break
+      except KernelOptError: pass
+
+  # no more opt if we are grouping
+  if k.group_for_reduces: return k
+</pre>
+  <p>If the kernel has at most 2048 outputs, there aren't enough of them to fill a GPU. It then <em>groups</em> the reduce axis
+  by 16: each output gets a block of 16 threads that share the work. Both <code>sum_rows</code> and <code>max_cols</code> have 1024
+  outputs, so both get <code>GROUPTOP(0, 16)</code> and nothing else. GROUP and GROUPTOP both create an
+  <code>AxisType.GROUP_REDUCE</code> range <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L136"></a>. The “TOP” means the
+  16-way split is taken from the <em>top</em> of the axis (<code>shift_to(..., top=True)</code>,
+  <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L172"></a>). Thread <code>t</code> therefore owns the contiguous chunk
+  <code>[64t, 64t+64)</code> of the 1024 values, not every 16th value.</p>
+
+  <h3>Reading the kernel name</h3>
+  <p>The name is built in <code>get_optimized_ast</code>: <code>r</code> if there is a reduce and <code>E</code> otherwise, then one
+  number per axis, in axis-type order, each coloured by its type <a class="src" data-src="tinygrad/codegen/opt/postrange.py#L53"></a>
+  <a class="src" data-src="tinygrad/uop/ops.py#L40"></a>. The colours are lost in the plain function name, but the captured passes
+  keep the raw string, so the widget below decodes them:</p>
+  <div class="kname" data-keys="sum_rows/default,max_cols/default,sum_all/default"></div>
+  <p><code>r_1024_16_64</code> is 1024 blocks (global), 16 threads per block that each own a slice of the reduction (group
+  reduce), and a loop of 64 per thread (reduce). 16 × 64 = 1024, the row length. The order is fixed by <code>axis_to_pos</code>:
+  globals, locals and group-reduces, upcasts, reduces, unrolls <a class="src" data-src="tinygrad/uop/ops.py#L45"></a>.</p>
+
+  <h2>From REDUCE to accumulators: <code>remove reduces</code></h2>
+  <p>After the opts, the AST still contains a REDUCE with two ranges: the 64-long REDUCE range and the 16-wide GROUP_REDUCE
+  range. The pass <code>remove reduces</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L325"></a> rewrites it in two
+  steps.</p>
+  <ol class="prose">
+    <li><code>fix_group_for_reduce</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L170"></a> splits the REDUCE.
+      It first reduces only over the ordinary REDUCE ranges, giving one partial per thread. It then <code>bufferize</code>s those partials
+      into a <code>STAGE</code> in <code>AddrSpace.LOCAL</code>, indexed by the group range. Finally it reduces again over
+      <em>new</em> REDUCE ranges with the axis number plus 100. That is why the CUDA source has a loop variable called
+      <code>Ridx102</code>: range 2 plus 100.</li>
+    <li><code>reduce_ranges_to_acc</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L210"></a> turns each remaining
+      REDUCE into a register accumulator. It creates a <code>BUFFER</code> in <code>AddrSpace.REG</code>, stores the identity element
+      into it before the loop (<code>identity_element</code> is 0 for ADD, 1 for MUL and the dtype's minimum for MAX,
+      <a class="src" data-src="tinygrad/uop/ops.py#L51"></a>), and stores <code>acc op value</code> inside the loop.</li>
+  </ol>
+  <p>Then <code>add local buffers</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L328"></a> makes the LOCAL STAGE a real
+  shared-memory <code>BUFFER</code>. <code>add gpudims</code> turns the GROUP_REDUCE range into <code>lidx0</code> (group-reduce
+  axes count as local dims, <a class="src" data-src="tinygrad/codegen/gpudims.py#L51"></a>). Because the global store doesn't use
+  <code>lidx0</code>, it is masked with <code>lidx0 == 0</code> <a class="src" data-src="tinygrad/codegen/gpudims.py#L77"></a>, so only
+  one thread per block writes. <code>add implicit barriers</code> sees a LOCAL load that depends on a LOCAL store and inserts a
+  <code>BARRIER</code> between them (<code>add_raw_barrier</code>, <a class="src" data-src="tinygrad/codegen/__init__.py#L261"></a>).
+  Step through the passes and watch the <code>REDUCE</code> disappear and <code>BUFFER</code>, <code>STAGE</code>,
+  <code>SPECIAL</code> and <code>BARRIER</code> appear:</p>
+  <div class="pass-stepper" data-key="sum_rows/default" data-kernel="0" data-stages="codegen" data-start="remove reduces"></div>
+  <p>The result, rendered for CUDA. A REG buffer becomes <code>float buf0[1]</code>, a LOCAL buffer becomes
+  <code>__shared__ __align__(16) float buf2[16]</code>, and BARRIER becomes <code>__syncthreads()</code>
+  <a class="src" data-src="tinygrad/renderer/cstyle.py#L412"></a>. The gated store becomes an <code>if</code>, the only place
+  IF/ENDIF is created <a class="src" data-src="tinygrad/codegen/__init__.py#L405"></a>:</p>
+  <div class="kernel-view" data-key="sum_rows/default" data-tabs="source,sass,ptxas,uops" data-tab="source" data-highlight="buf2|__syncthreads|lidx0==0|Ridx102"></div>
+
+  <h2>Watching one block reduce</h2>
+  <p>The animation runs this kernel for one block. The thread count, both loop lengths and the highlighted source lines are read
+  from the captured kernel. You can switch to the other GROUPTOP kernels in this chapter. Phase 1 is embarrassingly parallel:
+  16 threads each sum 64 values in a register. Phase 2 needs cooperation. Every thread publishes its partial in shared memory,
+  everyone waits at the barrier, then one thread reads all 16 slots.</p>
+  <div id="redtree"></div>
+  <p>Compare the CUDA C with the SASS (tab above). ptxas made three changes:</p>
+  <ul>
+    <li><b>Full unroll of the first loop.</b> It is 64 iterations with constant bounds, so ptxas issued all 64 loads up front
+      (<code>LDG.E R61, [R2.64]</code>, <code>[R2.64+0x4]</code>, … <code>+0xfc</code>) followed by a chain of <code>FADD</code>s. That
+      explains the 79 registers in <code>ptxas -v</code>: 64 of them hold loaded values in flight. The instruction mix has 64
+      <code>LDG</code> and 80 <code>FADD</code> (64 + 16).</li>
+    <li><b>The redundant second loop disappears.</b> In C every thread runs the <code>Ridx102</code> loop and only
+      <code>lidx0==0</code> stores. ptxas proved the work of the other threads is dead and emits <code>@P0 EXIT</code> right after
+      <code>BAR.SYNC.DEFER_BLOCKING 0x0</code>.</li>
+    <li><b>Vector shared loads.</b> Thread 0 reads the 16 partials as four <code>LDS.128</code>, because <code>buf2</code> is
+      16-byte aligned and the indices are constants after unrolling.</li>
+  </ul>
+  <div class="sass-mix" data-key="sum_rows/default" data-top="12"></div>
+  <p>Memory access is the weak spot. A thread's 64 values are contiguous, so neighbouring lanes are 256 bytes apart: every load
+  instruction touches 16 sectors for 64 useful bytes (Chapter 4's coalescing widget, <em>sum_rows</em>). The next loads hit the same
+  sectors, so the cache absorbs most of the waste. The kernel took <b>25.6 µs</b> for 4 MB.</p>
+
+  <h2>Max: identity −∞ and compare-select</h2>
+  <p><code>a.max(0)</code> reduces down columns and produces the same name, <code>r_1024_16_64</code>, with the same opts. Two
+  things differ. The accumulator starts at <code>-INFINITY</code> (the identity of MAX is <code>dtypes.float.min</code>). And there
+  is no <code>max</code> in the source. CUDA's renderer doesn't list <code>Ops.MAX</code>, so the pass <code>early
+  decompositions</code> rewrites it as <code>(a &lt; b).where(b, a)</code>
+  <a class="src" data-src="tinygrad/codegen/decomp/op.py#L89"></a>, which renders as a C ternary:</p>
+  <div class="kernel-view" data-key="max_cols/default" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="INFINITY|\?val"></div>
+  <p>In SASS each step is an <code>FSETP.GEU.AND</code> (compare into a predicate) plus an <code>FSEL</code> (select): 78 of each.
+  Only the first step of each loop, against the <code>-INF</code> starting value, became an <code>FMNMX</code> (2 in total).
+  ptxas keeps the other compare/select pairs, probably because the ternary's NaN behaviour is not exactly that of
+  <code>fmaxf</code>. This is also
+  why the kernel needs two instructions per element where the sum needs one, and partly why it took <b>33.79 µs</b> versus 25.6 µs.</p>
+  <div class="sass-mix" data-key="max_cols/default" data-top="10"></div>
+  <p>The access pattern also differs: <code>gidx0 + (lidx0&lt;&lt;16) + (Ridx0&lt;&lt;10)</code>. A block owns one column, and its
+  16 threads walk down the column 64 rows apart. Each load gets one useful float out of a 32-byte sector. Neighbouring blocks read
+  the neighbouring floats, so the L2 cache recovers most of it. PyTorch eager instead launched
+  <code>reduce_kernel&lt;128, 4, …MaxNanFunctor…&gt;</code>, whose 4 values per thread run along the contiguous axis.</p>
+
+  <h2>sum_all: one reduction, three kernels</h2>
+  <p>Now the big one: <code>a.sum()</code> over 4096 × 4096 = 16,777,216 floats into one number. A single kernel with a single
+  output would get one block on one SM. The scheduler prevents that before codegen even starts. In <code>earliest rewrites</code>,
+  every REDUCE passes through <code>split_reduceop</code> <a class="src" data-src="tinygrad/schedule/rangeify.py#L138"></a>:</p>
+<pre class="code static" data-lang="python">
+def split_reduceop(reduce:UOp, x:UOp):
+  if prod(reduce.shape) == 0: return None
+  if not SPLIT_REDUCEOP or not all_int(x.shape) or (prod(x.shape)//prod(reduce.shape))&lt;getenv("REDUCEOP_SPLIT_THRESHOLD", 32768): return None
+  ...
+  if not (split_candidates:=[(i,d) for i in range(reduce.arg[1])
+                             for d in range(min(256,2**getenv("REDUCEOP_SPLIT_SIZE",22)//prod(reduce.shape)),8-1,-1)
+                             if x.shape[i]%d==0 and not is_expanded[i]]): return None
+  dim_to_split, divisor = split_candidates[0]
+  ...
+  # reduce original axes, then split
+  return splitted._rop(reduce.arg[0], tuple(range(reduce.arg[1]))).contiguous()._rop(reduce.arg[0], (len(reduce.shape),)).reshape(reduce.shape)
+</pre>
+  <p>The rule <a class="src" data-src="tinygrad/schedule/rangeify.py#L71"></a>: if the reduction ratio (inputs per output) is at
+  least <code>REDUCEOP_SPLIT_THRESHOLD</code> = 32768, find the largest divisor <code>d</code> from
+  min(256, 2²²/outputs) down to 8 that divides the first reduced axis. Reshape that axis into <code>(d, rest)</code>, reduce
+  everything except <code>d</code>, force the result to exist with <code>.contiguous()</code> (a kernel boundary), then reduce the
+  <code>d</code> partials. <code>SPLIT_REDUCEOP</code> defaults to 1 <a class="src" data-src="tinygrad/helpers.py#L240"></a>.
+  <code>sum_rows</code> doesn't split: its ratio is 1024.</p>
+  <p>For <code>sum_all</code> the rule fires <em>twice</em>, because the rewrite is applied again to its own output:</p>
+  <ol class="prose">
+    <li>Ratio 16,777,216 / 1. Split axis 0 (4096) by 256: shape <code>(4096, 4096) → (16, 4096, 256)</code>, reduce to
+      <code>(256,)</code>, contiguous, reduce to <code>()</code>.</li>
+    <li>The new inner reduce, <code>(16, 4096, 256) → (256,)</code>, has ratio 65,536, still ≥ 32768. The largest candidate is now
+      min(256, 2²²/256) = 256, but the first reduced axis is 16, so <code>d = 16</code>: reduce to <code>(256, 16)</code>, contiguous,
+      reduce to <code>(256,)</code>.</li>
+  </ol>
+  <p>A CPU experiment with the same tinygrad (<code>DEV=CPU DEBUG=3</code>) prints both decisions:</p>
+<pre class="code static" data-lang="text">
+split 256: (4096, 4096) -> (16, 4096, 256) -> ()
+split 16: (16, 4096, 256) -> (1, 4096, 256, 16) -> (256,)
+scheduled     3 kernels in    65.91 ms | CACHE MISS 09d5ac45 |     213 uops in cache
+</pre>
+  <p>On the L4 capture you can see the result directly in the graph after <code>earliest rewrites</code>: two
+  <code>.contiguous()</code> and three <code>_rop(Ops.ADD, …)</code>. After <code>apply rangeify</code> the contiguous results became
+  two global <code>STAGE</code>s with <code>removable=False</code>, the cut points that <code>split kernels</code> later turns into
+  separate kernels. The kernel names and shapes on CPU differ (<code>r_256_4_4_1024_4</code>, …) because codegen targets a
+  different device. The schedule is the same.</p>
+  <div class="pass-stepper" data-key="sum_all/default" data-kernel="all" data-stages="schedule" data-start="earliest rewrites"></div>
+  <p>Look at what the reshapes do to the index of the first kernel. Its AST reads <code>c6*4096 + c12 + c3*65536</code> and stores
+  at <code>c3*16 + c6</code>, with <code>c12</code> the 4096-long reduce. The output index <code>c3*16 + c6</code> is a row number,
+  so kernel 0 computes the <b>4096 row sums</b>. Kernel 1 adds groups of 16 consecutive row sums, giving 256 partials, and kernel 2
+  adds those.</p>
+  <div id="split"></div>
+  <p>Each kernel then goes through the optimizer on its own, and their sizes lead to different opts:</p>
+  <ul>
+    <li><b>Kernel 0, <code>r_32_32_4_1024_4</code>.</b> 4096 outputs is more than 2048, so no grouping. The upcast loop
+      upcasts the output axis by 4 <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L114"></a>. The reduce is longer than 32,
+      so it is unrolled by 4 <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L139"></a>. LOCAL 32 completes it: 32 blocks
+      × 32 threads × 4 rows per thread, and a loop of 1024 × 4. Each thread keeps 4 accumulators (<code>float buf0[4]</code>, one
+      per row) and loads one <code>float4</code> from each row per iteration. In <code>expander</code>, the UNROLL turns the 4 loaded
+      lanes into a horizontal add, <code>acc + v.x + v.y + v.z + v.w</code>
+      (<code>expand_horizontal_reduce</code>, <a class="src" data-src="tinygrad/codegen/__init__.py#L222"></a>). ptxas unrolled
+      the loop 4 more times: 16 <code>LDG.E.128</code> per trip, 76 registers, no shared memory.</li>
+    <li><b>Kernel 1, <code>r_256_16</code>.</b> 256 outputs, so GROUPTOP 16 takes the whole 16-wide reduce. Each thread
+      loads one value, and there is no first loop at all. Thread 0 sums the 16 shared slots.</li>
+    <li><b>Kernel 2, <code>r_16_16</code>.</b> One output, GROUPTOP 16: 16 threads each sum 16, then thread 0 sums 16. Its
+      second loop is called <code>Ridx101</code> (range 1 + 100).</li>
+  </ul>
+  <div class="kernel-view" data-key="sum_all/default" data-kernel="0" data-tabs="source,sass,ptxas,ast" data-tab="source" data-highlight="float4|buf0\+"></div>
+  <p>The times expose the weakness of kernel 0. It ran in <b>471.97 µs</b>. Reading 64 MB in that time is about 142 GB/s, roughly
+  half of what the L4's memory can deliver. The launch has only 32 blocks of 32 threads, 1024 threads on a GPU with 58 SMs, so
+  26 SMs sit idle and each busy SM has a single warp. Each warp's loads are 64 KB apart per lane and half-used per instruction
+  (<em>sum_all kernel 0</em> in Chapter 4's widget). The two small kernels add <b>19.46 µs</b> and <b>14.34 µs</b>, which is
+  almost entirely launch overhead under tinygrad's event timer.</p>
+
+  <h3>A note on accuracy</h3>
+  <p>A float32 sum of 16M numbers depends on the order of additions. The capture's check compares against a float64 numpy
+  reference: the maximum absolute error was <b>0.00423</b> on a result of magnitude 449.33, well within the example's tolerance.
+  The split helps. A CPU experiment (numpy, same seeded input) replays tinygrad's exact order: 4 lanes added left to right into
+  each row accumulator, then groups of 16, then 16 × 16. It gives an error of 0.00423, matching the GPU. A strictly
+  sequential float32 loop over all 16M values is off by 0.151, about 36 times worse, because by the end each new element is
+  added to a running sum hundreds of times larger and loses low bits. numpy's own pairwise float32 sum gets 0.00087. Multi-level
+  reductions behave like a shallow tree: each partial sums only 4096, 16 or 16 values.</p>
+
+  <h2>PyTorch: one reduce kernel, or persistent and split Triton kernels</h2>
+  <div class="callout torch"><p><b>Eager.</b> Every reduction goes through TensorIterator's generic <code>reduce_kernel</code>.
+  For <code>sum(1)</code> and <code>sum()</code> the captured kernel is <code>reduce_kernel&lt;512, 1, ReduceOp&lt;float, …sum_functor…,
+  unsigned int, float, 4, 4&gt;&gt;</code>: 512 threads per block, with 4-wide vectorized loads and 4 accumulators per thread
+  (the trailing <code>4, 4</code>). For the full sum it reduced 16M floats in <b>264.26 µs</b> in a single launch. It parallelizes
+  across blocks itself, using a global semaphore so that the last block to finish combines the partials. That is what the
+  <code>Memset (Device)</code> before it initializes. <code>max(0)</code> uses <code>reduce_kernel&lt;128, 4, …MaxNanFunctor…&gt;</code>.</p></div>
+  <p><b>Inductor</b> classifies a reduction as <em>persistent</em> (<code>triton_per_*</code>) when the whole reduced axis fits in one
+  block of registers, or <em>looped</em> (<code>triton_red_*</code>) when it does not. For <code>sum(1)</code>, a row of 1024 fits:
+  <code>triton_per_fused_sum_0</code> loads the whole row as a <code>[XBLOCK, 1024]</code> tile and calls <code>tl.sum(tmp3, 1)</code>.</p>
+  <div class="torch-view" data-key="sum_rows/torch" data-tabs="eager,output,ttgir,sass" data-tab="output" data-highlight="tl.sum|tl.load|R0_BLOCK"></div>
+  <p>Triton lowers <code>tl.sum</code> to a butterfly of warp shuffles (<code>SHFL.BFLY</code>, 5 of them for 32 lanes) and needs no
+  shared memory at all, since the kernel runs with <code>num_warps = 1</code>. Its loads are <code>LDG.E.EF.128</code>: vectorized, with
+  an evict-first cache hint from <code>eviction_policy='evict_first'</code>. Switch the animation above to <em>butterfly</em> to
+  compare the two patterns: tinygrad funnels 16 partials through one thread, while a butterfly needs log₂ 32 = 5 steps in which all
+  lanes work.</p>
+  <p>For the full sum Inductor also splits into two stages, with a different choice of split.
+  <code>triton_red_fused_sum_0</code> uses <code>xnumel = 174</code> and <code>r0_numel = 96421</code>: 174 partial sums of 96,421
+  elements each. 174 × 96421 is slightly more than 16,777,216, so the load is masked with <code>tmp0 &lt; 16777216</code>. Inductor
+  chose a number of partials that keeps every SM busy (174 = 3 × 58) instead of a divisor of the shape.
+  <code>triton_per_fused_sum_1</code> then reduces the 174 partials in one persistent block.</p>
+  <div class="torch-view" data-key="sum_all/torch" data-tabs="eager,output,ttir,ttgir,sass" data-tab="output" data-highlight="xnumel|r0_numel|tl.sum|for r0_offset"></div>
+  <div class="bars" data-keys="sum_rows/default,sum_rows/torch:eager,sum_rows/torch:inductor,max_cols/default,max_cols/torch:eager,max_cols/torch:inductor,sum_all/default,sum_all/torch:eager,sum_all/torch:inductor"
+       data-labels="sum_rows · tinygrad|sum_rows · eager|sum_rows · Triton (per)|max_cols · tinygrad|max_cols · eager|max_cols · Triton (red+per)|sum_all · tinygrad (3 kernels)|sum_all · eager|sum_all · Triton (red+per)"
+       data-title="L4 time, all kernels (tinygrad: event-timed incl. launch overhead; torch: profiler kernel time)"></div>
+  <p>For the small reductions most of the gap is the timing method (see the callout in Chapter 4): tinygrad's event timer adds
+  roughly 14 µs per launch, and these kernels do a few microseconds of work. For <code>sum_all</code> the comparison is
+  meaningful, because the work dominates. tinygrad's 505.77 µs total against eager's 264.26 µs and Triton's 284.67 µs is the
+  cost of 32 blocks with half-used load instructions against launches that fill all 58 SMs.</p>
+
+  <h2>Summary</h2>
+  <ul>
+    <li><code>_rop</code> emits <code>REDUCE(op, n_axes)</code> after permuting the reduced axes to the front. Rangeify gives it
+      <code>REDUCE</code> ranges.</li>
+    <li>Large reductions (ratio ≥ 32768) are split in the tensor graph by <code>split_reduceop</code>, repeatedly. 16M → 4096 →
+      256 → 1 gives three kernels for <code>sum_all</code>.</li>
+    <li>With at most 2048 outputs the heuristic applies <code>GROUPTOP 16</code>. <code>remove reduces</code> turns the REDUCE into
+      a register accumulator, a shared-memory buffer and a second accumulator. gpudims masks the store to <code>lidx0==0</code>, and
+      a barrier separates the shared store from the shared loads.</li>
+    <li>Names list one number per axis: globals, locals/group-reduces, upcasts, reduces, unrolls.</li>
+    <li>MAX starts at −∞ and becomes compare + select (<code>FSETP</code>/<code>FSEL</code> in SASS).</li>
+    <li>PyTorch eager uses one templated <code>reduce_kernel</code>. Inductor picks persistent (<code>per</code>) or looped
+      (<code>red</code>) Triton kernels and reduces within a warp with shuffles.</li>
+  </ul>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch04.js"></script><script src="assets/ch05.js"></script></body></html>

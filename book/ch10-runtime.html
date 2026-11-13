@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>10. Runtime, TinyJit and autograd · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+  .anim { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 22px 0; overflow: hidden; }
+  .anim .widget-head .grow { flex: 1; }
+  .anim svg { display: block; width: 100%; height: auto; background: #0b1017; }
+  .anim .caption { padding: 10px 14px 12px; border-top: 1px solid var(--line); font-size: 14px; min-height: 5.2em; color: #cdd6e0; }
+  .anim .caption b.rule { font-family: var(--mono); color: #fff; }
+  .anim .caption .srcs { display: block; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+  /* autograd graph */
+  .ag-node rect { fill: #151d28; stroke: #3a4b60; stroke-width: 1.4; rx: 7; transition: fill .4s, stroke .4s, opacity .4s; }
+  .ag-node text { fill: #e6edf3; font: 600 12px var(--mono); text-anchor: middle; pointer-events: none; }
+  .ag-node text.s { font: 10.5px var(--mono); fill: #9fb0c3; font-weight: 400; }
+  .ag-node { transition: opacity .5s, transform .5s; }
+  .ag-node.hidden, .ag-edge.hidden { opacity: 0; }
+  .ag-node.fwd rect { stroke: var(--s-tensor); }
+  .ag-node.grad rect { stroke: #f472b6; fill: #22121c; }
+  .ag-node.new rect { stroke-width: 3; filter: drop-shadow(0 0 6px #f472b6); }
+  .ag-node.dead { opacity: .22; }
+  .ag-node.k0 rect { fill: #3a2c0b; stroke: #fbbf24; stroke-width: 2.2; }
+  .ag-node.k1 rect { fill: #0d3324; stroke: #34d399; stroke-width: 2.2; }
+  .ag-node.k01 rect { fill: #24301a; stroke: #a3e635; stroke-width: 2.2; }
+  .ag-node.mop rect { stroke-dasharray: 5 3; }
+  .ag-edge { fill: none; stroke: #4b5d73; stroke-width: 1.5; transition: opacity .5s; marker-end: url(#agArrow); }
+  .ag-edge.g { stroke: #f472b6; }
+  .ag-edge.cross { stroke: #f472b6; stroke-dasharray: 4 4; }
+  .ag-tag { font: 600 11px var(--mono); transition: opacity .5s; }
+  .ag-colhead { fill: var(--muted); font: 600 12px var(--sans); letter-spacing: .08em; }
+  /* jit timeline */
+  .tl-lane { fill: #10161e; }
+  .tl-lanelabel { fill: #9fb0c3; font: 12px var(--sans); }
+  .tl-block { transition: opacity .35s; }
+  .tl-block rect { rx: 4; }
+  .tl-block text { fill: #081018; font: 600 10.5px var(--mono); pointer-events: none; }
+  .tl-block.off { opacity: 0.08; }
+  .tl-callhead { fill: #fff; font: 600 13px var(--sans); }
+  .tl-callsub { fill: var(--muted); font: 11px var(--mono); }
+  .tl-cursor { stroke: #fff; stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .tl-log { margin: 0; border-top: 1px solid var(--line); }
+  /* annotated DEBUG=2 line */
+  .dbg { padding: 14px; overflow-x: auto; }
+  .dbg pre { margin: 0; font: 12px var(--mono); white-space: pre-wrap; color: #cdd6e0; }
+  .dbg .seg { border-radius: 3px; cursor: pointer; padding: 1px 0; border-bottom: 2px solid transparent; }
+  .dbg .seg:hover, .dbg .seg.on { background: rgba(124,196,255,.18); border-bottom-color: var(--accent); }
+  .dbg-expl { padding: 10px 14px; border-top: 1px solid var(--line); min-height: 4.5em; font-size: 14px; }
+  table.data td, table.data th { font-size: 13px; }
+  .tablewrap { overflow-x: auto; max-width: 100%; }
+  table.data { width: 100%; }
+  table.data td.mono { font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+  table.data td.what { min-width: 150px; }
+  .lanekey { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 10</div><h1>Runtime, TinyJit and autograd</h1>
+  <p class="lede">The previous chapters followed a single <code>realize()</code> from the Tensor graph to SASS. This one covers
+  what happens around it. A gradient in tinygrad is more UOp graph, built by a pattern matcher and compiled by the same
+  scheduler and codegen. A compiled kernel is loaded into the CUDA driver and launched with a packed argument
+  struct. <code>TinyJit</code> records the kernel list once and replays it, which skips Python graph building,
+  scheduling and compiling on later calls. Each step is shown against L4 captures, with PyTorch's autograd, Inductor and
+  CUDA graphs alongside for comparison.</p>
+  <div class="pipeline" data-active="tensor,run"></div>
+
+  <!-- ===================================================================== -->
+  <h2>Autograd is graph construction</h2>
+  <p>PyTorch's eager autograd records a <em>tape</em> while the forward pass runs. Every op that needs a gradient
+  stores a backward node and the tensors it will need, and <code>.backward()</code> walks that tape and launches
+  backward kernels. tinygrad has nothing to record. When you write <code>(x @ w).relu().sum()</code>, no kernel has
+  run yet, and the Tensor is a lazy UOp graph (Chapter 2). So the gradient is a <em>graph transformation</em>: walk the
+  forward graph backwards, and for each node emit new UOps that compute the gradient of its inputs. The output is
+  another lazy graph. Nothing runs until you realize it.</p>
+  <p>The entry point is <code>Tensor.gradient(*targets)</code>. If no output gradient is given, it seeds one with
+  <code>self.const_like(1.0)</code> <a class="src" data-src="tinygrad/mixin/op.py#L471"></a> and calls
+  <code>compute_gradient(root, root_grad, targets)</code> <a class="src" data-src="tinygrad/mixin/op.py#L473"></a>.
+  <code>Tensor.backward()</code> is a thin wrapper. It collects every live float tensor in the graph, calls
+  <code>gradient</code> for all of them, and stores the results in <code>.grad</code>
+  <a class="src" data-src="tinygrad/tensor.py#L667"></a>–<a class="src" data-src="tinygrad/tensor.py#L675"></a>. Those
+  <code>.grad</code> tensors are lazy too.</p>
+
+  <h3>compute_gradient in about forty lines</h3>
+  <p><code>compute_gradient</code> <a class="src" data-src="tinygrad/mixin/gradient.py#L96"></a> works in three steps:</p>
+  <ol class="prose">
+    <li><b>Find the path.</b> <code>_deepwalk</code> <a class="src" data-src="tinygrad/mixin/gradient.py#L89"></a>
+    toposorts the graph and keeps only the nodes that lie between the root and one of the targets. A branch that
+    cannot reach <code>w</code>, such as the path to <code>x</code> when you only ask for <code>dL/dw</code>, gets
+    no gradient. <code>DETACH</code> stops the walk.</li>
+    <li><b>Apply one rule per node, root first.</b> For each node in reverse topological order, it looks up the
+    node's gradient so far (<code>grads[t0]</code>) and rewrites the node with the pattern matcher
+    <code>pm_gradient</code>, passing that gradient as <code>ctx</code>
+    <a class="src" data-src="tinygrad/mixin/gradient.py#L116"></a>. Each rule returns one gradient per source.</li>
+    <li><b>Fix shapes and accumulate.</b> If a source's shape differs from its gradient's shape (broadcasting
+    lives in <code>_shape</code>, so a <code>MUL</code> of a <code>(256,1,512)</code> and a <code>(1,256,512)</code> is
+    legal), the gradient is summed down to the source's shape
+    <a class="src" data-src="tinygrad/mixin/gradient.py#L122"></a>. If the source already has a gradient (it is used
+    twice), the two are added <a class="src" data-src="tinygrad/mixin/gradient.py#L128"></a>.</li>
+  </ol>
+  <p>The rules themselves are ordinary <code>UPat</code> → lambda entries, the same machinery as every other rewrite in
+  the book. The ones our example needs are below:</p>
+  <pre class="code static" data-lang="python">
+# tinygrad/mixin/gradient.py   (ctx is the gradient flowing into the node)
+def reduce_gradient(ctx:UOp, ret:UOp, op:Ops):
+  if op == Ops.ADD: return (ctx._broadcast_to(ret.src[0].shape),)          # line 9
+  ...
+pm_gradient = PatternMatcher([
+  (UPat((Ops.CMPLT, Ops.CMPNE)), lambda: (None, None)),                     # line 59: comparisons have no gradient
+  (UPat(Ops.ADD), lambda ctx: (ctx, ctx)),
+  (UPat(Ops.MUL, name="ret"), lambda ctx, ret: (ret.src[1]*ctx, ret.src[0]*ctx)),   # line 65
+  (UPat(Ops.WHERE, name="ret"), lambda ctx, ret: (None, ret.src[0].where(ctx, ctx.const_like(0)),
+                                                     ret.src[0].where(ctx.const_like(0), ctx))),  # line 66
+  (UPat(Ops.REDUCE, name="ret"), lambda ctx, ret: reduce_gradient(ctx, ret, ret.arg[0])),         # line 67
+  (UPat(Ops.RESHAPE, name="ret"), lambda ctx, ret: (ctx.reshape(ret.src[0].shape), None)),         # line 70
+  (UPat(Ops.EXPAND), lambda ctx: (ctx, None)),
+  (UPat(Ops.PERMUTE, name="ret"), lambda ctx, ret: (ctx.permute(argsort(ret.marg)),)),             # line 74
+  ...
+])
+</pre>
+  <p>There is no "matmul backward" or "relu backward" rule, because neither op exists by the time the gradient runs.
+  <code>dot</code> builds the matmul from reshapes, a transpose, a broadcasting <code>MUL</code> and a
+  <code>sum</code> <a class="src" data-src="tinygrad/mixin/op.py#L390"></a>–<a class="src" data-src="tinygrad/mixin/op.py#L392"></a>.
+  <code>_rop</code> permutes the reduced axes to the front before emitting <code>REDUCE</code>
+  <a class="src" data-src="tinygrad/uop/ops.py#L636"></a>, which is why a <code>PERMUTE</code> sits under every
+  reduce. <code>relu</code> is <code>(self &gt; 0).where(self, 0)</code>
+  <a class="src" data-src="tinygrad/mixin/elementwise.py#L680"></a>. The comment above it explains the choice: written
+  as <code>maximum(0)</code>, the <code>MAX</code> rule would pass half the gradient through at exactly zero.
+  So the gradient of a matmul falls out of the <code>MUL</code>, <code>REDUCE</code> and movement rules, and the
+  gradient of relu falls out of the <code>WHERE</code> rule.</p>
+
+  <h3>Watch the rules fire</h3>
+  <p>The animation below starts from the forward graph of <code>(x @ w).relu().sum()</code>. Each step applies one
+  rule and attaches the new gradient UOps (pink) to the graph. Forward data flows up and gradients flow down. Note the
+  two dashed pink edges, where gradient nodes read <em>forward</em> nodes. The last step shows how the scheduler
+  splits the result into kernels.</p>
+  <div class="anim" id="ag-anim"></div>
+  <p>The node list in the animation comes from a CPU experiment that prints the toposort of the gradient UOp. The same
+  graph, as it reached the scheduler on the L4, is the first IR in the pass stepper below. In
+  <code>pyrender</code> form it reads <code>c25 = (0 &lt; c17._rop(ADD)).where(EXPAND(1.0), EXPAND(0.0))</code>, which is
+  the mask, and <code>c28 = c8 * PERMUTE(EXPAND(c25))</code> summed over axis 0, which is <code>x</code> times the
+  broadcast mask.</p>
+  <pre class="code static" data-lang="text">
+# CPU experiment (DEV=CPU, tinygrad 0.14 venv): loss=(x@w).relu().sum(); g=loss.gradient(w)[0]
+# for u in g.uop.toposort(): print(u.op, u._shape, u.arg)   -- gradient part only; shape STACKs and the 0.0 branch omitted
+Ops.CMPLT (256, 256) None              # the forward relu mask 0 &lt; (x@w), reused
+Ops.CONST () 1.0                       # seed: d loss / d loss
+Ops.EXPAND (256, 256) None             # REDUCE(ADD) rule: broadcast the seed back
+Ops.WHERE (256, 256) None              # WHERE rule: mask.where(grad, 0)
+Ops.EXPAND (512, 256, 256) None        # REDUCE(ADD) rule for the matmul's sum
+Ops.PERMUTE (256, 256, 512) (1, 2, 0)  # PERMUTE rule: inverse permutation
+Ops.MUL (256, 256, 512) None           # MUL rule: x * grad
+Ops.REDUCE (256, 512) (Ops.ADD, 1)     # shape fix: (256,256,512) summed down to (1,256,512)
+Ops.RESHAPE (1, 256, 512) None
+Ops.PERMUTE (1, 512, 256) (0, 2, 1)    # PERMUTE rule for w's transpose
+Ops.RESHAPE (512, 256) None            # RESHAPE rule: dL/dw
+</pre>
+
+  <!-- ===================================================================== -->
+  <h2>The gradient goes through the same compiler</h2>
+  <p>After <code>compute_gradient</code> returns, nothing about the graph says "backward". The harness realizes
+  <code>loss.gradient(w)[0]</code>, and the scheduler and codegen see a graph of <code>MUL</code>,
+  <code>REDUCE</code>, <code>WHERE</code> and movement ops like any other. Step through the passes. The tensor-stage
+  IR is the gradient graph. <b>apply rangeify</b> creates two <code>STAGE</code>s. <b>symbolic+reduce_collapse+debuf</b>
+  removes the one on <code>x</code> and keeps the one on the mask. <b>split kernels</b> cuts the graph into two
+  kernels.</p>
+  <div class="pass-stepper" data-key="mlp_backward/default" data-kernel="all" data-stages="tensor,schedule" data-start="apply rangeify"
+       data-title="Passes for d/dw of (x@w).relu().sum() on the L4"></div>
+
+  <h3>Why two kernels, and which two</h3>
+  <p>The fusion rules from Chapter 3 decide this. The mask <code>(0 &lt; Σ x·w).where(1, 0)</code> ends in a
+  <code>REDUCE</code>, and its consumer <em>broadcasts</em> it over a new axis: the 512-long <code>EXPAND</code>
+  in the second matmul. That is the "reduce before the broadcast" decision in rangeify
+  <a class="src" data-src="tinygrad/schedule/indexing.py#L220"></a>, the rule that splits softmax. The cost model
+  <code>remove_bufferize</code> could still inline the STAGE, but it refuses when a REDUCE inside the source reads a
+  buffer <a class="src" data-src="tinygrad/schedule/rangeify.py#L259"></a>–<a class="src" data-src="tinygrad/schedule/rangeify.py#L266"></a>.
+  Recomputing a 512-long dot product for every element of the next matmul would be far too expensive. So the mask
+  gets its own buffer and its own kernel.</p>
+  <p>Kernel 0 is <code>r_8_4_8_16_4_4_128_4</code>. Its AST stores <code>(0 &lt; Σ<sub>k</sub> x[i,k]·w[k,j]).where(1.0, 0.0)</code>
+  into a 65536-float buffer. Look at the source: the whole forward matmul runs in this kernel, 16 accumulators per
+  thread over 128 iterations of an unrolled-by-4 loop. The product <code>x@w</code> stays in registers and is never
+  written to memory. Only the comparison result reaches memory, as 0.0 or 1.0:</p>
+  <div class="kernel-view" data-key="mlp_backward/default" data-kernel="0" data-tabs="ast,source,ptxas,sass" data-tab="source" data-highlight="0\.0f&lt;|make_float4"
+       data-title="Kernel 0: the relu mask, with the forward matmul computed inside it"></div>
+  <p>Kernel 1 is <code>r_8_8_8_16_4_4_64_4</code>, the second matmul. Its AST is
+  <code>out[j*512+k] = Σ<sub>i</sub> x[i*512+k] · mask[i*256+j]</code>, a 256-long reduction (64 iterations × 4 unrolled).
+  The indexing shows a detail you would miss from the Python. The output buffer is laid out as
+  <code>(256, 512)</code>, so it holds <code>mask.T @ x</code>. The gradient tensor, shape <code>(512, 256)</code>, is a
+  <code>PERMUTE</code> view of that buffer: the last lines of the tensor graph end in <code>PERMUTE(..., (0, 2, 1))</code>
+  followed by a <code>RESHAPE</code>. Realizing the gradient only had to produce some buffer it can be viewed from. A
+  CPU experiment confirms the cost of this: <code>g.realize()</code> runs 2 kernels and a following <code>g.numpy()</code> runs a
+  third, an <code>E_</code> copy that makes the view contiguous. The L4 capture only times the two realize kernels.</p>
+  <div class="kernel-view" data-key="mlp_backward/default" data-kernel="1" data-tabs="ast,source,ptxas" data-tab="ast"
+       data-title="Kernel 1: x.T @ mask, stored transposed"></div>
+  <p>Both kernels got the same opts (<code>UPCAST 4, UPCAST 4, UNROLL 4, LOCAL 8, LOCAL 16</code>) and the same
+  56 registers. They do almost the same number of FLOPs (the <code>ops</code> estimates are 67,239,936 and 67,108,864). Yet
+  kernel 0 took 70.66 µs and kernel 1 took 37.89 µs. The difference is probably memory access. A warp here is 8 <code>threadIdx.x</code> lanes × 4
+  <code>threadIdx.y</code> rows. In kernel 0, the <code>x</code> load address is
+  <code>(gidx1&lt;&lt;14)+(lidx0&lt;&lt;11)+(Ridx0&lt;&lt;2)</code>, so the 8 <code>threadIdx.x</code> lanes read float4s
+  2048 floats apart. In kernel 1, the <code>threadIdx.x</code> term of the mask load is <code>lidx0&lt;&lt;2</code>, so
+  those lanes read 8 consecutive float4s, and the other operand (indexed by <code>lidx1</code>) is shared across them. That is an
+  inference from the source, not a profiler measurement.</p>
+
+  <div class="callout">
+  <p><b>Recompute instead of store?</b> In this capture nothing was "stored by the forward pass" at all, because
+  there was no separate forward pass. We asked for <code>dL/dw</code> only, so the loss and the relu output were never
+  computed (the faded nodes in the last animation step). The forward matmul exists only inside kernel 0. What happens if
+  you also want the loss? A second CPU experiment, <code>Tensor.realize(loss, g)</code>, schedules 4 kernels: one stores
+  <code>x@w</code> itself (65536 floats), a two-stage reduction computes relu and sum from that buffer, and the gradient
+  matmul recomputes the mask <code>0 &lt; s ? 1 : 0</code> from the same buffer on the fly. The scheduler sees the
+  forward and backward graphs together and shares the matmul between them. No kernel stores the relu output or the
+  mask, as a PyTorch saved tensor would.</p>
+  </div>
+
+  <!-- ===================================================================== -->
+  <h2>PyTorch: a tape, saved tensors, cuBLAS</h2>
+  <p>The torch capture computes the same gradient with <code>(x @ w).relu().sum().backward()</code>. In eager mode
+  that is a forward pass followed by a backward pass, 7 kernels in total. Open the <em>Eager kernels</em> tab:</p>
+  <ul class="prose">
+    <li>forward <code>x @ w</code>: a CUTLASS SIMT SGEMM (<code>cutlass_80_simt_sgemm_128x64_8x5_nn_align1</code>,
+    8.93 µs) plus cuBLASLt's <code>splitKreduce_kernel</code> (3.39 µs). cuBLAS split the K=512 reduction across blocks and
+    added the partial results in a second kernel.</li>
+    <li>forward relu: <code>launch_clamp_scalar</code> (1.47 µs). The relu output is materialized because autograd
+    saves it for the backward.</li>
+    <li>forward <code>sum</code>: <code>reduce_kernel&lt;512, 1, ...sum_functor...&gt;</code> (8.0 µs).</li>
+    <li>backward seed: <code>FillFunctor</code> (1.06 µs) writes the 1.0 that <code>.backward()</code> starts from.</li>
+    <li>relu backward: <code>threshold_kernel_impl</code> (1.89 µs). It reads the saved relu output and writes the masked
+    gradient.</li>
+    <li><code>x.T @ grad</code>: <code>ampere_sgemm_32x32_sliced1x4_nt</code> (10.94 µs).</li>
+  </ul>
+  <div class="torch-view" data-key="mlp_backward/torch" data-tabs="eager,fx,post,output,ttir,ptx,sass" data-tab="eager"></div>
+  <p>Under <code>torch.compile</code>, AOTAutograd traces forward and backward into one joint graph and partitions it.
+  The <em>FX graph</em> tab shows the compiled <b>backward</b> graph and its inputs. It takes
+  <code>le: "b8[256, 256]"</code>, a <em>bool</em> mask saved by the forward, plus <code>permute: "f32[512, 256]"</code>
+  (<code>x.T</code>, a view with strides <code>(1, 512)</code>) and <code>tangents_1</code>, the incoming scalar
+  gradient. The partitioner chose to save one byte per element instead of the float relu output, and the forward kernel
+  <code>triton_red_fused_relu_sum_threshold_backward_0</code> writes that mask while it computes partial relu-sums;
+  a second forward kernel, <code>triton_per_fused_relu_sum_1</code> (1.15 µs), adds the partials into the loss. The
+  backward is one Triton pointwise kernel, <code>triton_poi_fused_expand_threshold_backward_0</code>
+  (<code>where(le, 0, tangent)</code>), and then <code>extern_kernels.mm</code>, which is cuBLAS again. Both matmuls
+  stay in vendor libraries.</p>
+  <div class="bars" data-keys="mlp_backward/default,mlp_backward/torch:eager,mlp_backward/torch:inductor"
+       data-labels="tinygrad (2 kernels, gradient only)|PyTorch eager (7 kernels, fwd + bwd)|torch.compile (7 kernels, fwd + bwd)"
+       data-title="d/dw of (x@w).relu().sum(): total kernel time on the L4"></div>
+  <p>The totals are 108.55 µs for tinygrad, 35.68 µs for eager and 27.78 µs for Inductor. PyTorch does <em>more</em>
+  work, since it also computes the loss, and still finishes 3–4× sooner. Nearly all of the gap is the two matmuls:
+  cuBLAS/CUTLASS take about 23 µs (with split-K) where tinygrad's hand-coded-opts kernels take 108 µs. The structural
+  difference is the interesting part of this chapter, though. PyTorch's autograd is a runtime mechanism that saves
+  tensors from a forward pass that has already run. tinygrad's is a compile-time graph construction, and the
+  scheduler alone decides what to store and what to recompute.</p>
+
+  <!-- ===================================================================== -->
+  <h2>From PROGRAM to cuLaunchKernel</h2>
+  <p>Everything so far produced a <code>LINEAR</code>: a list of <code>CALL</code>s, each holding a compiled
+  <code>PROGRAM</code> (source + binary + <code>ProgramInfo</code>) and the buffers it touches. <code>run_linear</code>
+  <a class="src" data-src="tinygrad/engine/realize.py#L315"></a> executes it. When not in the JIT, it first calls
+  <code>compile_linear</code> (codegen for every kernel that is not in <code>to_program_cache</code>, in parallel worker
+  processes). It then walks the calls and dispatches each one through the <code>pm_exec</code> pattern matcher
+  <a class="src" data-src="tinygrad/engine/realize.py#L294"></a>, which routes it to <code>exec_kernel</code>,
+  <code>exec_copy</code> or <code>exec_graph</code>. For a kernel:</p>
+  <pre class="code static" data-lang="python">
+# tinygrad/engine/realize.py:180-190  exec_kernel (excerpt, inside the per-device loop)
+prg_bufs = [b.ensure_allocated() for b in bufs]          # allocate on first use
+rt = get_runtime(device, ast, cache=ctx.cache)            # CUDAProgram, cached by (ast.key, device)
+global_size, local_size = ast.arg.launch_dims(var_vals)   # symbolic sizes resolved here
+ets.append(rt(*[b.get_buf(device) for b in prg_bufs], global_size=global_size, local_size=local_size,
+              vals=ast.arg.vals(var_vals), wait=ctx.wait, timeout=ctx.timeout))
+</pre>
+  <h3>Loading: cuModuleLoadData</h3>
+  <p><code>get_runtime</code> <a class="src" data-src="tinygrad/engine/realize.py#L126"></a> builds
+  <code>Device["CUDA"].runtime(ast.to_elf())</code> once per kernel and device and caches it in
+  <code>runtime_cache</code>. For CUDA the runtime is <code>CUDAProgram</code>. Its constructor sets the context,
+  calls <code>cuModuleLoadData</code> on the compiled bytes <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L44"></a>,
+  and looks the kernel up by name with <code>cuModuleGetFunction</code>
+  <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L48"></a>. On the <code>CUDA</code> device NVRTC was asked
+  for <b>PTX</b>, not a cubin (<code>ptx=... or dev == "CUDA"</code>,
+  <a class="src" data-src="tinygrad/renderer/cstyle.py#L406"></a>). The PTX-to-SASS step therefore happens inside the
+  driver, during this <code>cuModuleLoadData</code> call. The SASS shown throughout this book was produced separately
+  with <code>ptxas -arch=sm_89</code>, as the kernel-view notes say.</p>
+
+  <h3>Launching: one struct, one call</h3>
+  <p>The first call packs the arguments into a ctypes struct with <code>encode_args</code>
+  <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L18"></a>. Buffer pointers become 8-byte
+  <code>CUdeviceptr</code> fields <code>f0, f1, …</code> at offsets 0, 8, 16, …. Integer kernel arguments (symbolic
+  Variables, see below) follow as <code>v0, v1, …</code> at the offsets the kernel signature gives. The struct is passed
+  through the <code>extra</code> array (<code>CU_LAUNCH_PARAM_BUFFER_POINTER</code>, the struct pointer,
+  <code>CU_LAUNCH_PARAM_BUFFER_SIZE</code>, its size, <code>CU_LAUNCH_PARAM_END</code>), not <code>kernelParams</code>.
+  Later calls skip <code>encode_args</code> and just overwrite the fields <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L63"></a>.
+  Then:</p>
+  <pre class="code static" data-lang="python">
+# tinygrad/runtime/ops_cuda.py:65
+return cu_time_execution(lambda: check(cuda.cuLaunchKernel(self.prg, *global_size, *local_size, self.smem, None, None, self.vargs)),
+                         enable=wait)
+</pre>
+  <p>tinygrad's <code>global_size</code> is the CUDA <b>grid in blocks</b> and <code>local_size</code> is the
+  <b>block in threads</b>. For kernel 0 above (grid <code>4 × 8 × 1</code>, block <code>8 × 16 × 1</code>) the call is
+  <code>cuLaunchKernel(prg, 4, 8, 1, 8, 16, 1, 0, NULL, NULL, extra)</code>. That is 32 blocks of 128 threads, matching
+  <code>__launch_bounds__(128)</code> in the source. The stream argument is <code>None</code>, the default stream, so
+  launches run in order. With <code>wait=True</code>, <code>cu_time_execution</code> records a CUDA event before and after
+  the launch, synchronizes on the second, and returns <code>cuEventElapsedTime</code>
+  <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L26"></a>–<a class="src" data-src="tinygrad/runtime/ops_cuda.py#L35"></a>.
+  <code>DEBUG&gt;=2</code> forces <code>wait</code> <a class="src" data-src="tinygrad/engine/realize.py#L318"></a>, which is
+  where every L4 time in this book comes from. It also means that at <code>DEBUG=2</code> every launch is synchronous.</p>
+
+  <h3>Reading a DEBUG=2 line</h3>
+  <p>Each executed call prints one line from <code>track_stats</code>
+  <a class="src" data-src="tinygrad/engine/realize.py#L92"></a>. Click the parts of this real line, the first call of
+  the JIT example below:</p>
+  <div class="anim" id="dbg-line" data-key="jit/default"></div>
+
+  <h3>Memory: the allocator and the arena</h3>
+  <p>Buffers are allocated lazily (<code>ensure_allocated</code>) through the device's allocator.
+  <code>CUDAAllocator</code> <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L67"></a> calls
+  <code>cuMemAlloc_v2</code>. Host-to-device copies are staged through pinned memory from <code>cuMemHostAlloc</code>
+  and sent with <code>cuMemcpyHtoDAsync_v2</code>; the staging buffers are freed at the next
+  <code>synchronize</code>. Device-to-host copies synchronize first. The allocator is an <code>LRUAllocator</code>
+  <a class="src" data-src="tinygrad/device.py#L250"></a>. A freed buffer goes into a cache keyed by
+  <code>(size, options)</code>, and the next allocation of the same size takes it back without touching the driver. Only
+  when <code>cuMemAlloc</code> fails is the cache emptied and the allocation retried.</p>
+  <p>Before any of that, the schedule's intermediate buffers are <em>planned</em>. <code>memory_plan_rewrite</code>
+  <a class="src" data-src="tinygrad/schedule/memory.py#L20"></a> runs at the end of every schedule
+  <a class="src" data-src="tinygrad/schedule/__init__.py#L209"></a> and again at JIT capture. It records the first and
+  last kernel that touches each internal buffer, then replays those open/close events through a TLSF suballocator,
+  rounding every buffer to 256 bytes. Buffers whose lifetimes do not overlap share bytes. The result is one
+  <code>int8</code> arena per device (copy buffers get a separate lane), and every buffer becomes
+  <code>arena[off:off+n].bitcast(dtype)</code> <a class="src" data-src="tinygrad/schedule/memory.py#L57"></a>. In
+  <code>mlp_backward</code> the 256×256 mask is such an intermediate: kernel 0 writes it, kernel 1 reads it, and nothing
+  else holds it. Buffers that a live Tensor can still see (<code>held_bufs</code>) are never planned.</p>
+
+  <h3>Three caches</h3>
+  <table>
+    <tr><th>cache</th><th>key</th><th>what it saves</th><th>where</th></tr>
+    <tr><td>schedule cache</td><td>the graph's structural key, with buffers replaced by PARAMs and bound Variables unbound</td>
+      <td>rangeify, kernel splitting, everything in the Schedule stage</td><td><a class="src" data-src="tinygrad/schedule/__init__.py#L123"></a></td></tr>
+    <tr><td><code>to_program_cache</code> (in memory)</td><td><code>(ast.key, renderer type, target, NOOPT, TC, TRANSCENDENTAL, …)</code></td>
+      <td>all codegen passes, rendering, compiling</td><td><a class="src" data-src="tinygrad/codegen/__init__.py#L496"></a></td></tr>
+    <tr><td>compile cache (on disk)</td><td>the full source string, in table <code>compile_cuda_sm_89_22</code></td>
+      <td>the NVRTC call, across processes</td><td><a class="src" data-src="tinygrad/device.py#L307"></a></td></tr>
+  </table>
+  <p>The disk cache is a SQLite file at <code>~/.cache/tinygrad/cache.db</code> (or <code>$XDG_CACHE_HOME</code>, or
+  <code>CACHEDB=</code>) <a class="src" data-src="tinygrad/helpers.py#L397"></a>–<a class="src" data-src="tinygrad/helpers.py#L398"></a>.
+  Its tables are suffixed with <code>VERSION = 22</code> <a class="src" data-src="tinygrad/helpers.py#L400"></a>.
+  <code>Compiler.compile_cached</code> looks up <code>diskcache_get(self.cachekey, src)</code> and only calls
+  <code>compile</code> on a miss. <code>NVRTCCompiler</code> uses the cache key <code>compile_cuda_sm_89</code>
+  <a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L54"></a>. <code>CCACHE=0</code> turns it off, and
+  <code>ASSERT_COMPILE=1</code> raises if anything would compile. The symbolic example below shows the first two caches
+  in its log: the second call prints <code>cache hit 189b9319</code> for the schedule, and no source, because nothing was
+  compiled.</p>
+
+  <h3>The NV backend: the same launch without libcuda</h3>
+  <p><code>DEV=NV</code> is a second NVIDIA backend that does not use the CUDA driver API. All captures in this book
+  were made with <code>DEV=CUDA</code>, so this section is a source reading and has no L4 numbers.
+  <code>NVDevice</code> <a class="src" data-src="tinygrad/runtime/ops_nv.py#L585"></a> picks an interface. The default
+  <code>NVKIface</code> opens <code>/dev/nvidiactl</code>, <code>/dev/nvidia-uvm</code> and
+  <code>/dev/nvidia<i>N</i></code> <a class="src" data-src="tinygrad/runtime/ops_nv.py#L388"></a> and talks to the kernel
+  driver's resource manager with raw <code>ioctl</code>s (<code>rm_alloc</code>, <code>rm_control</code>
+  <a class="src" data-src="tinygrad/runtime/ops_nv.py#L416"></a>). <code>PCIIface</code> goes further and drives the GPU
+  over PCI with no kernel driver at all. tinygrad allocates its own channel, GPFIFO rings and command buffers in
+  memory mapped into Python.</p>
+  <p>A launch is then just writing memory:</p>
+  <ul class="prose">
+    <li><code>NVComputeQueue.exec</code> <a class="src" data-src="tinygrad/runtime/ops_nv.py#L135"></a> copies the
+    program's prebuilt <b>QMD</b> (Queue Meta Data, the hardware's launch descriptor) next to the argument buffer. It
+    writes the grid size and the block size into the QMD fields <a class="src" data-src="tinygrad/runtime/ops_nv.py#L144"></a>–<a class="src" data-src="tinygrad/runtime/ops_nv.py#L146"></a>
+    and points constant buffer 0 at the arguments <a class="src" data-src="tinygrad/runtime/ops_nv.py#L147"></a>.</li>
+    <li>Submission <a class="src" data-src="tinygrad/runtime/ops_nv.py#L114"></a> writes a GPFIFO ring entry that
+    points at the command buffer, bumps <code>GPPut</code>, issues a memory barrier and rings the doorbell register
+    <code>gpu_mmio[0x90//4]</code> <a class="src" data-src="tinygrad/runtime/ops_nv.py#L125"></a>.</li>
+    <li>No driver loads the code here, so the program must be a real ELF cubin, which tinygrad's own
+    <code>elf_loader</code> relocates <a class="src" data-src="tinygrad/runtime/ops_nv.py#L257"></a>. That is why the
+    CUDA renderer asks NVRTC for a cubin on <code>NV</code> and PTX on <code>CUDA</code>.</li>
+  </ul>
+  <p>Its graph type is the generic HCQ graph, which builds the command queue once and patches it, instead of a
+  <code>CUgraph</code>.</p>
+
+  <!-- ===================================================================== -->
+  <h2>TinyJit: capture once, replay forever</h2>
+  <p>Even with every cache warm, each un-jitted call still pays for Python building the Tensor graph, the schedule cache
+  lookup (which hashes the graph), <code>compile_linear</code> resolving programs, and Python walking the calls one by
+  one. For a training step with hundreds of kernels that overhead dominates. <code>TinyJit</code> removes almost all of
+  it. The capture below wraps one function and calls it four times with new inputs:</p>
+  <pre class="code static" data-lang="python">
+# harness/jit_demo.py (run on the L4 with DEV=CUDA, DEBUG=2 per call)
+w = Tensor(np.random.default_rng(0).standard_normal((512, 512), dtype=np.float32)).realize()
+
+@TinyJit
+def step(x: Tensor) -> Tensor:
+  return ((x @ w).relu() * 2 + 1).sum(1).realize()
+
+for i in range(4):
+  x = Tensor(np.full((256, 512), i + 1, dtype=np.float32)).realize()
+  y = step(x)
+</pre>
+  <div id="jit-calls" data-key="jit/default"></div>
+
+  <h3>The three states of cnt</h3>
+  <p><code>_TinyJit.__call__</code> <a class="src" data-src="tinygrad/engine/jit.py#L242"></a> branches on a
+  counter. The captured <code>jit_cnt_after</code> values above, 1, 2, 3, 4, are that counter after each call
+  <a class="src" data-src="tinygrad/engine/jit.py#L290"></a>.</p>
+  <ul class="prose">
+    <li><b>cnt == 0: run normally</b> <a class="src" data-src="tinygrad/engine/jit.py#L244"></a>. The function runs as
+    plain tinygrad: build the graph, schedule, compile, run. This warms every cache, and it is how BEAM search (if enabled)
+    gets to pick opts before anything is frozen. Call 0's kernel line has a green header in a terminal because it is the
+    first run of that kernel (<code>first_run_cache</code>, <a class="src" data-src="tinygrad/engine/realize.py#L86"></a>).
+    The capture stores logs without color codes.</li>
+    <li><b>cnt == 1: capture</b> <a class="src" data-src="tinygrad/engine/jit.py#L250"></a>. The JIT puts itself in
+    the global <code>capturing</code> list and runs the function again. Python rebuilds the graph and the scheduler builds
+    the <code>LINEAR</code>. But at the end of <code>create_linear_with_vars</code> the scheduler sees
+    <code>capturing</code>, hands the linear to the JIT with <code>add_linear</code>, and returns an <em>empty</em>
+    LINEAR <a class="src" data-src="tinygrad/schedule/__init__.py#L204"></a>–<a class="src" data-src="tinygrad/schedule/__init__.py#L206"></a>,
+    so nothing runs yet. Then it prints <code>JIT captured 1 linears with 1 inputs</code>
+    <a class="src" data-src="tinygrad/engine/jit.py#L262"></a> (one <code>realize</code>, one Tensor argument;
+    <code>w</code> is not an input, its buffer is baked into the captured calls). It concatenates the linears and runs
+    <code>jit_lower</code> <a class="src" data-src="tinygrad/engine/jit.py#L66"></a>, which does four things:
+      <ol>
+        <li>replaces each input buffer with a <code>PARAM</code> slot</li>
+        <li>memory-plans the intermediates</li>
+        <li>compiles everything (with <code>JITBEAM</code> if set; here every kernel is already in <code>to_program_cache</code>)</li>
+        <li>groups kernels into graph batches</li>
+      </ol>
+    Finally it wraps the result in a <code>CapturedJit</code> and <em>executes it</em>
+    <a class="src" data-src="tinygrad/engine/jit.py#L281"></a>. That is why call 1 still shows its kernel line, now
+    printed with <code>ctx.jit=True</code> (a magenta header).</li>
+    <li><b>cnt ≥ 2: replay</b> <a class="src" data-src="tinygrad/engine/jit.py#L282"></a>. The Python function is
+    <em>not called</em>. <code>_prepare_jit_inputs</code> extracts the input buffers and any bound Variables. Their names
+    and <code>(view, variables, dtype, device)</code> must match the capture or you get <code>JitError("args mismatch in
+    JIT")</code>. Then <code>CapturedJit.__call__</code> runs <code>run_linear(self.linear, var_vals, input_uops=...,
+    jit=True)</code> <a class="src" data-src="tinygrad/engine/jit.py#L187"></a>, and <code>jit=True</code> skips
+    <code>compile_linear</code> entirely <a class="src" data-src="tinygrad/engine/realize.py#L317"></a>. Calls 2 and 3
+    print only their kernel lines.</li>
+  </ul>
+  <p>The timeline animates the four calls. It is <b>not to scale</b> on the CPU side, since the capture has no host
+  timings. The GPU blocks are labeled with the measured kernel times.</p>
+  <div class="anim" id="jit-timeline"></div>
+
+  <h3>Swapping inputs</h3>
+  <p>Each replay must read the <em>new</em> <code>x</code>. During capture, <code>jit_lower</code> substituted every
+  input buffer with <code>UOp.param(i, ...)</code> <a class="src" data-src="tinygrad/engine/jit.py#L70"></a>. At replay,
+  <code>resolve_params</code> maps each PARAM slot to <code>input_uops[slot]</code>, the buffers of this call's
+  arguments <a class="src" data-src="tinygrad/engine/realize.py#L153"></a>–<a class="src" data-src="tinygrad/engine/realize.py#L157"></a>.
+  <code>CUDAProgram</code> then writes the new pointer into the <code>f</code> field of its argument struct. The
+  captured outputs show it worked. With <code>x</code> filled with <i>c</i> = 1, 2, 3, 4 and relu being positively
+  homogeneous, each row sum is <code>2·c·S + 512</code>, so <code>y[0]</code> should be linear in <i>c</i>. It is: 9831.30,
+  19150.61, 28469.90, 37789.21, in steps of 9319.30. Two details follow from the code.
+  If the captured kernels <em>write</em> into an input, the JIT copies that input first (<code>_copy_input</code>,
+  <a class="src" data-src="tinygrad/engine/jit.py#L185"></a>). And the return value is the <em>same</em> Tensor object
+  every replay (<code>return self.ret</code>, <a class="src" data-src="tinygrad/engine/jit.py#L188"></a>), with its buffer
+  overwritten, which is why the harness reads <code>y[0]</code> right after each call.</p>
+
+  <h3>The kernel it replays</h3>
+  <p>The whole function, matmul + relu + <code>*2</code> + <code>+1</code> + row sum, fused into one kernel,
+  <code>r_256_16_512_32</code>. The capture records its name and timings but not its source, so below is the CUDA C that
+  tinygrad renders for this graph. It was produced offline (CPU experiment) with <code>NVCCRenderer</code> for
+  <code>sm_89</code> from the same commit. That renderer prints the same C as <code>CUDARenderer</code> and only swaps
+  NVRTC for nvcc, and the kernel name and launch dims match the L4 capture. There are 256 blocks of 16 threads. Each thread
+  computes 32 output columns of <code>x@w</code> one 512-long dot product at a time, applies relu·2+1, and accumulates. A
+  shared-memory step then sums the 16 partial row sums. It is correct but slow (about 167 GFLOPS). In this offline render the heuristic applied a single opt,
+  <code>GROUPTOP</code> over the 512 output columns, and none of the upcasts that gave kernel 0 above its 16
+  accumulators per thread.</p>
+  <pre class="code static" data-lang="c">
+// CPU experiment: NVCCRenderer(Target("CUDA","NVCC","sm_89")), same graph as step(); name/dims match the L4 capture
+extern "C" __global__ void __launch_bounds__(16) r_256_16_512_32(float* data0_256, float* data1_131072, float* data2_262144) {
+  float buf0[1];
+  float buf1[1];
+  float buf2[1];
+  __shared__ __align__(16) float buf3[16];
+  int gidx0 = blockIdx.x; /* 256 */
+  int lidx0 = threadIdx.x; /* 16 */
+  *(buf1+0) = 0.0f;
+  for (int Ridx1 = 0; Ridx1 &lt; 32; Ridx1++) {
+    *(buf0+0) = 0.0f;
+    for (int Ridx0 = 0; Ridx0 &lt; 512; Ridx0++) {
+      float val0 = (*(data1_131072+((gidx0&lt;&lt;9)+Ridx0)));
+      float val1 = (*(data2_262144+((lidx0&lt;&lt;5)+Ridx1+(Ridx0&lt;&lt;9))));
+      *(buf0+0) = ((*(buf0+0))+(val0*val1));
+    }
+    float val2 = (*(buf0+0));
+    float alu4 = ((0.0f&lt;val2)?val2:0.0f);
+    *(buf1+0) = ((alu4*2.0f)+(*(buf1+0))+1.0f);
+  }
+  *(buf3+lidx0) = (*(buf1+0));
+  __syncthreads();
+  *(buf2+0) = 0.0f;
+  for (int Ridx103 = 0; Ridx103 &lt; 16; Ridx103++) {
+    float val3 = (*(buf3+Ridx103));
+    *(buf2+0) = ((*(buf2+0))+val3);
+  }
+  if ((lidx0==0)) {
+    *(data0_256+gidx0) = (*(buf2+0));
+  }
+}
+</pre>
+
+  <h3>Batching into CUDA graphs</h3>
+  <p>With one kernel there is nothing to batch, so the capture contains no CUDA graph. The last step of
+  <code>jit_lower</code> is <code>graph_split_rewrite</code> <a class="src" data-src="tinygrad/engine/jit.py#L32"></a>.
+  It walks the captured calls and collects consecutive ones that the device's graph class supports
+  (<code>CUDAGraph</code> is a <code>MultiGraphRunner</code>: <code>PROGRAM</code>s and <code>COPY</code>s on devices of
+  one type, <a class="src" data-src="tinygrad/engine/jit.py#L159"></a>). A batch of one is left alone unless
+  <code>GRAPH_ONE_KERNEL=1</code> <a class="src" data-src="tinygrad/engine/jit.py#L39"></a>. That is the case here: calls 2
+  and 3 are each one plain <code>cuLaunchKernel</code>. Larger batches become a
+  <code>CUSTOM_FUNCTION(arg="graph")</code> call, and <code>DEBUG=2</code> prints <code>JIT GRAPHing batch with N
+  kernels</code>. Batch sizes start at <code>JIT_BATCH_SIZE</code> = 32 <a class="src" data-src="tinygrad/helpers.py#L234"></a>
+  and double after each flushed batch (<code>max_batch_size *= 2</code>, <a class="src" data-src="tinygrad/engine/jit.py#L42"></a>),
+  so a long step becomes graphs of 32, 64, 128, … kernels. The first batch starts executing early, and the number of
+  graph launches stays small.</p>
+  <p>At first execution <code>exec_graph</code> builds a <code>CUDAGraph</code>
+  <a class="src" data-src="tinygrad/runtime/graph/cuda.py#L10"></a>. It calls <code>cuGraphCreate</code>, then one
+  <code>cuGraphAddKernelNode</code> per kernel with the same grid, block and packed-args <code>extra</code> as a direct
+  launch. Each node's dependencies come from a read/write tracker over the buffers, so independent kernels may overlap.
+  It finishes with <code>cuGraphInstantiate</code>. Each replay then patches only what changed: input pointers, Variable
+  values and symbolic launch dims, through <code>cuGraphExecKernelNodeSetParams</code>
+  <a class="src" data-src="tinygrad/runtime/graph/cuda.py#L49"></a>–<a class="src" data-src="tinygrad/runtime/graph/cuda.py#L68"></a>.
+  It then issues one <code>cuGraphLaunch</code> <a class="src" data-src="tinygrad/runtime/graph/cuda.py#L70"></a>, and
+  <code>DEBUG=2</code> shows that launch as a single line named <code>batched N</code>
+  <a class="src" data-src="tinygrad/engine/realize.py#L43"></a>. Use the second mode of the timeline above to see the
+  difference. <code>JIT=2</code> keeps the JIT but disables graphs, and <code>JIT=0</code> disables the JIT.</p>
+
+  <!-- ===================================================================== -->
+  <h2>Symbolic shapes: one kernel for every n</h2>
+  <p>A JIT replays fixed kernels, so a changing shape would normally mean a new capture. LLM decoding, where the KV
+  length grows by one token per step, would recompile every step. tinygrad's answer is a <code>Variable</code>: a
+  symbolic integer with bounds, bound to a value for one call. The harness runs <code>(big[:n] * 2).sum()</code> with
+  <code>n = Variable("n", 1, 1024).bind(10)</code>, then <code>.bind(700)</code>, at <code>DEBUG=4</code> on the L4:</p>
+  <div id="sym-log"></div>
+  <p>Read the first log from the top. The schedule was a <code>CACHE MISS</code>, then <code>DEBUG=4</code> printed the
+  source just before compiling it (<a class="src" data-src="tinygrad/codegen/__init__.py#L450"></a>). The kernel is
+  named <code>r_n</code>. The slice length is not a constant in it: <code>n</code> became the kernel parameter
+  <code>const int data2_</code>, and the loop runs <code>Ridx0 &lt; data2_</code>. The second run, with n = 700, printed
+  <code>cache hit 189b9319</code> (the same schedule key) and <em>no source</em>, because
+  <code>to_program_cache</code> already held the program. Both sums match numpy (90 and 489300).</p>
+  <p>The value travels as an ordinary argument. <code>ProgramInfo.vals(var_vals)</code> turns the bound values into a
+  tuple in the order of the program's <code>vars</code> <a class="src" data-src="tinygrad/uop/ops.py#L1236"></a>.
+  <code>exec_kernel</code> passes them as <code>vals=</code>, and <code>encode_args</code> places them after the
+  pointers as <code>c_int32</code> fields. For <code>r_n</code> the struct is <code>f0</code> (output pointer, offset 0),
+  <code>f1</code> (<code>big</code>, offset 8) and <code>v0</code> (<code>n</code>, offset 16). Launch dims may be
+  symbolic too, and <code>launch_dims(var_vals)</code> evaluates them per call
+  <a class="src" data-src="tinygrad/uop/ops.py#L1231"></a>. Inside a JIT, <code>_prepare_jit_inputs</code> unbinds the
+  Variables from the arguments <a class="src" data-src="tinygrad/engine/jit.py#L215"></a>. A CUDA graph replay
+  writes the new values into each node's <code>v</code> fields and grid dims
+  (<a class="src" data-src="tinygrad/runtime/graph/cuda.py#L57"></a>–<a class="src" data-src="tinygrad/runtime/graph/cuda.py#L62"></a>)
+  before relaunching.</p>
+  <div class="callout warn">
+  <p>A symbolic size has a cost. With the reduce length unknown, the optimizer applied no upcast, local or group opts:
+  <code>__launch_bounds__(1)</code>, a single thread walking the whole slice. The two runs took 28.67 µs (n=10)
+  and 31.81 µs (n=700), almost all of it fixed launch and loop overhead at this size. In real models the symbolic axis is
+  usually one of several axes, and the kernel still parallelizes over the others.</p>
+  </div>
+
+  <!-- ===================================================================== -->
+  <h2>PyTorch: CUDA graphs and dynamic shapes</h2>
+  <div class="callout torch">
+  <p><b>Background, not from the captures.</b> The book's torch captures use default <code>torch.compile</code>, which
+  does not use CUDA graphs. Nothing below was measured here.</p>
+  <ul>
+    <li><b><code>mode="reduce-overhead"</code></b> enables CUDA graphs in Inductor ("CUDA graph trees"). After warm-up
+    runs, the compiled region's kernel launches are recorded into a <code>torch.cuda.CUDAGraph</code> and later calls replay
+    it. A recorded graph bakes in device addresses, so PyTorch keeps static input and output buffers. Inputs that are not
+    already static (parameters and buffers are) are copied into the recorded placeholders before each replay, and outputs
+    live in graph-owned memory that a later replay may overwrite. That is the same trade-off as TinyJit's
+    <code>self.ret</code>. tinygrad avoids the input copy by patching pointers into the instantiated graph.</li>
+    <li><b>Dynamic shapes.</b> Dynamo guards on input shapes. When a shape changes, the default "automatic dynamic"
+    behavior recompiles once with that dimension symbolic (<code>s0</code>; Triton kernels then take sizes such as
+    <code>ks0</code> as arguments, much like <code>data2_</code> above). <code>torch._dynamo.mark_dynamic</code> or
+    <code>dynamic=True</code> asks for this up front. With CUDA graphs on top, each distinct concrete shape still needs its
+    own recorded graph.</li>
+    <li><b>Autograd.</b> PyTorch builds the backward from the forward tape at runtime in eager mode, and from a traced
+    joint graph under <code>torch.compile</code>, where a min-cut partitioner chooses what to save. That is the
+    <code>le</code> bool mask seen above. tinygrad has neither a tape nor a partitioner. The gradient is part of the graph
+    being scheduled, and rangeify's realize rules make the save-or-recompute choice.</li>
+  </ul>
+  </div>
+
+  <h2>Summary</h2>
+  <ul class="prose">
+    <li><code>Tensor.gradient</code> walks the lazy UOp graph and applies one <code>pm_gradient</code> rule per node.
+    Matmul and relu have no rules of their own: <code>MUL</code>, <code>REDUCE</code>, <code>WHERE</code> and the
+    movement rules compose into their gradients.</li>
+    <li>The gradient graph is scheduled like any other. For <code>d/dw (x@w).relu().sum()</code> the scheduler realized
+    the relu mask, because a reduce is broadcast into the next matmul. The forward matmul therefore runs inside the mask
+    kernel and never touches memory, and the loss itself is never computed.</li>
+    <li>A kernel runs as <code>cuModuleLoadData</code> (the driver JITs the PTX) followed by <code>cuLaunchKernel</code>
+    with grid = <code>global_size</code>, block = <code>local_size</code> and a packed argument struct. Intermediates live
+    in a planned arena, and three caches avoid repeating scheduling, codegen and NVRTC.</li>
+    <li>TinyJit's cnt runs, captures, then replays. A replay is input checks plus <code>run_linear(jit=True)</code>, or one
+    <code>cuGraphLaunch</code> per batch when there are several kernels. Variables turn shapes into kernel arguments, so
+    one compiled kernel serves every size.</li>
+  </ul>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch10.js"></script></body></html>

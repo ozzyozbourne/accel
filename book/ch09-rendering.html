@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>9. Rendering and compiling: CUDA C, PTX, SASS · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+.c9-cols { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0; }
+.c9-col { min-width: 0; border-right: 1px solid var(--line); } .c9-col:last-child { border-right: 0; }
+.c9-col pre.code { max-height: 560px; font-size: 11.5px; }
+.c9-col.c pre.code { white-space: pre-wrap; word-break: break-all; }
+.c9-col.p pre.code, .c9-col.s pre.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.c9-col.p .c9-l, .c9-col.s .c9-l { padding-left: 4ch; text-indent: -4ch; }
+.c9-l { transition: background .15s, opacity .15s; cursor: default; }
+.c9-cols:hover .c9-l, .c9-cols.has-on .c9-l { opacity: 1; }
+.c9-l.c9-m { cursor: pointer; }
+.c9-l.c9-on { background: rgba(251, 191, 36, .2); box-shadow: inset 3px 0 var(--s-render); }
+.c9-note { padding: 9px 12px; border-top: 1px solid var(--line); font-size: 13.5px; color: #c3ccd6; min-height: 2.6em; }
+.c9-ladder { position: relative; display: flex; flex-direction: column; gap: 12px; }
+.c9-rung { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: center; }
+.c9-lab { font: 600 12.5px var(--sans); color: var(--c); border-left: 3px solid var(--c); padding-left: 8px; }
+.c9-txt { margin: 0; padding: 8px 12px; background: #0a0e14; border: 1px solid var(--line); border-radius: 8px; min-height: 38px; font: 12.5px/1.55 var(--mono);
+  overflow-x: auto; opacity: 0; transform: translateY(-6px); transition: opacity .5s, transform .5s, border-color .5s; }
+.c9-txt .ln, .c9-ghost .ln { display: block; white-space: pre; }
+.c9-txt.in { opacity: 1; transform: none; border-color: var(--c); }
+.c9-rung:has(.c9-txt.in) .c9-txt { border-color: var(--c); }
+.c9-ghost { position: absolute; margin: 0; opacity: .9 !important; transform: none; transition: transform .8s cubic-bezier(.3, .7, .2, 1), opacity .8s ease !important; pointer-events: none;
+  padding: 8px 12px; background: #1c2430; border: 1px solid #fff3; border-radius: 8px; font: 12.5px/1.55 var(--mono); overflow: hidden; }
+.c9-route { width: 100%; display: block; }
+.c9-route text { font: 12px var(--sans); fill: #d7dde5; } .c9-route .sub { font: 10.5px var(--mono); fill: var(--muted); }
+@media (max-width: 1000px) { .c9-cols { grid-template-columns: 1fr; } .c9-rung { grid-template-columns: 1fr; } }
+</style></head>
+<body><main>
+<div class="kicker">Chapter 9</div><h1>Rendering and compiling: CUDA C, PTX, SASS</h1>
+<p class="lede">After the last codegen pass, a kernel is still a graph. This chapter follows it the rest of the way: the
+linearizer orders the graph into a list, the renderer prints that list as CUDA C (or as PTX, with tinygrad's own assembly
+renderer), NVRTC turns C into PTX, and ptxas turns PTX into the SASS the L4 executes. We compare the two routes tinygrad offers,
+line by line, and see that they land on nearly the same machine code, then look at the third route PyTorch takes through Triton
+and LLVM.</p>
+<div class="pipeline" data-active="render,compile"></div>
+
+<h2>From graph to list: linearization</h2>
+<p>Everything until now has been a <code>graph_rewrite</code> on a DAG of UOps. Text, though, is sequential. The first step of
+<code>pm_to_program</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L455"></a> is <code>do_linearize</code>
+<a class="src" data-src="tinygrad/codegen/__init__.py#L421"></a>, which calls <code>linearize(sink)</code>
+<a class="src" data-src="tinygrad/codegen/late/linearizer.py#L8"></a>. It is a toposort with priorities:</p>
+<ul>
+<li>Each UOp gets a key <code>(run_count, priority, extra)</code>. <code>run_count</code> is the product of the sizes of the loops
+it lives in, so code inside loops sorts later than code outside them.</li>
+<li>The priority puts PARAMs first (ordered by slot), then buffers, and pushes LOADs early, STOREs late, RANGEs early and ENDs late
+<a class="src" data-src="tinygrad/codegen/late/linearizer.py#L26"></a>.</li>
+<li>A heap then emits UOps in that ideal order, but only once all their consumers are placed (it works from the SINK backwards and
+reverses the list at the end, <a class="src" data-src="tinygrad/codegen/late/linearizer.py#L39"></a>), so the result is always a valid
+topological order.</li>
+</ul>
+<p>Then <code>pm_linearize_cleanups</code> does one structural rewrite on the list: a STORE with a gate becomes
+<code>IF</code>, <code>STORE</code>, <code>ENDIF</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L402"></a>. That is the only
+way an <code>if</code> enters a tinygrad kernel. Here is the linear list for <code>a + b</code>, the kernel this chapter dissects. The
+columns are index, op, dtype, sources (by index) and arg:</p>
+<div class="kernel-view" data-key="add_ptx/cuda" data-tabs="uops,source" data-tab="uops" data-highlight="SPECIAL|SHRINK|LOAD|STORE|Ops.ADD +dtypes.float"></div>
+<p>Two details are worth noticing. Every constant appears as <code>CONST</code> of a <code>weakint</code> followed by a
+<code>CAST</code> to a real dtype: the <code>casted consts</code> pass spells every literal that way. And the vector load is
+<code>SHRINK</code> (4 elements starting at the index) then <code>LOAD</code>, followed by four <code>INDEX</code> uops that pick
+lanes 0..3 out of the loaded vector.</p>
+
+<h2>The CUDA C renderer</h2>
+<p><code>do_render</code> hands the list to <code>renderer.render</code> <a class="src" data-src="tinygrad/codegen/__init__.py#L445"></a>.
+For the default CUDA device that is <code>CUDARenderer</code> <a class="src" data-src="tinygrad/renderer/cstyle.py#L397"></a>, a
+subclass of the generic <code>CStyleLanguage</code>. Its <code>_render</code> loop
+<a class="src" data-src="tinygrad/renderer/cstyle.py#L199"></a> walks the uops once and builds a dictionary from each UOp to a
+string. Each UOp is turned into text by a <code>PatternMatcher</code> (<code>string_rewrite</code>), the same machinery as every
+other pass, except that the rewrite produces strings instead of UOps.</p>
+<p>The rules that shape what you see in every kernel of this book:</p>
+<ul>
+<li><b>Names.</b> PARAMs are named <code>data{slot}_{size}</code> <a class="src" data-src="tinygrad/renderer/cstyle.py#L221"></a>. Other
+values get a prefix by op: <code>val</code> for loads, <code>alu</code> for arithmetic, <code>cast</code>, <code>bidx</code>,
+<code>buf</code>, <code>wmma</code> <a class="src" data-src="tinygrad/renderer/cstyle.py#L230"></a>.</li>
+<li><b>Inlining.</b> A UOp gets its own variable only when it has to. Single-use ALU results, casts, and all INDEX/SHRINK address
+expressions are pasted into their consumer as text <a class="src" data-src="tinygrad/renderer/cstyle.py#L238"></a>. That is why the
+add kernel has <code>alu0</code> (used three times) but no variable for the sums. <code>EXPAND_SSA=1</code> stops inlining single-use ALU, STACK and cast results (addresses are still inlined).</li>
+<li><b>SPECIAL</b> becomes <code>blockIdx.x</code>/<code>threadIdx.x</code> with the bound in a comment
+<a class="src" data-src="tinygrad/renderer/cstyle.py#L47"></a>, using <code>code_for_workitem</code>
+<a class="src" data-src="tinygrad/renderer/cstyle.py#L417"></a>.</li>
+<li><b>Signature.</b> <code>extern "C" __global__ void __launch_bounds__(N)</code> <a class="src" data-src="tinygrad/renderer/cstyle.py#L411"></a>,
+where N is the product of the maxima of all local SPECIALs <a class="src" data-src="tinygrad/renderer/cstyle.py#L155"></a>, i.e.
+exactly the block size. It lets ptxas budget registers for that block size.</li>
+<li><b>Prefix.</b> Every kernel starts with the same four lines: <code>typedef unsigned int uint</code>, <code>INFINITY</code> and
+<code>NAN</code> as bit patterns, and the <code>tg_bitcast</code> union template
+<a class="src" data-src="tinygrad/renderer/cstyle.py#L443"></a>. Half, bfloat16 and fp8 add includes, vector structs and, for tensor
+cores, a WMMA wrapper around inline <code>mma.sync</code> (chapter 7).</li>
+<li><b>Vectors.</b> A 4-wide STACK becomes <code>make_float4(...)</code>, a vector load is a cast to <code>float4*</code> and a
+dereference <a class="src" data-src="tinygrad/renderer/cstyle.py#L188"></a>, and lanes are <code>.x .y .z .w</code>.</li>
+<li><b>Gated loads</b> become a C conditional <code>(gate ? *ptr : alt)</code> <a class="src" data-src="tinygrad/renderer/cstyle.py#L58"></a>;
+the gated store became an <code>if</code> during linearization.</li>
+<li><b>Accumulators</b> are register arrays (<code>float buf0[1];</code>) written through <code>*(buf0+0)</code>, and RANGE becomes a
+<code>for</code> loop <a class="src" data-src="tinygrad/renderer/cstyle.py#L16"></a>.</li>
+</ul>
+<p>The <code>sum_rows</code> kernel shows most of these at once: register accumulators, two loops, shared memory with a barrier,
+and the gated final store.</p>
+<div class="kernel-view" data-key="sum_rows_ptx/cuda" data-tabs="source,ptxas" data-tab="source" data-highlight="buf\d|for \(|if \(|__syncthreads|__launch_bounds__"></div>
+<p>And the padded slice from chapter 4 shows a gated load: the whole validity mask became the condition of a C <code>?:</code>.</p>
+<div class="kernel-view" data-key="pad_slice/default" data-tabs="source" data-tab="source" data-highlight="\?\*"></div>
+
+<h2>NVRTC and the compile cache</h2>
+<p>The source string goes to <code>do_compile</code>, which calls <code>compiler.compile_cached(source)</code>
+<a class="src" data-src="tinygrad/codegen/__init__.py#L449"></a>. For CUDA C that compiler is <code>NVRTCCompiler</code>, NVIDIA's
+runtime-compilation library loaded through ctypes. Its options are short
+<a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L48"></a>:</p>
+<pre class="code static" data-lang="python">
+self.compile_options = [f'--gpu-architecture={arch}']          # sm_89 on the L4
+self.compile_options += ["-I/usr/local/cuda/include", "-I/usr/include", "-I/opt/cuda/include"]  # or CUDA_PATH
+if (nvrtcMajor.value, nvrtcMinor.value) >= (12, 4): self.compile_options.append("--minimal")
+</pre>
+<p>No <code>-use_fast_math</code>, no <code>-O</code> flag (NVRTC optimizes by default), and floating-point contraction on, which is
+why the multiply-adds in previous chapters became <code>FFMA</code>. <code>--minimal</code> omits certain language features (texture and surface
+functions, the cudadevrt runtime functions) to cut compile time; tinygrad's kernels use none of them.</p>
+<p>What comes back is <b>PTX</b>, not a binary: on the CUDA device the renderer creates the compiler with <code>ptx=True</code>
+<a class="src" data-src="tinygrad/renderer/cstyle.py#L406"></a>, and <code>compile</code> calls <code>nvrtcGetPTX</code>
+<a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L59"></a>. The last step to SASS happens when the runtime calls
+<code>cuModuleLoadData</code> on that PTX <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L44"></a>: the CUDA driver contains its
+own copy of ptxas and JIT-compiles for the GPU it finds. (The NV backend, which talks to the GPU without libcuda, asks NVRTC for a
+CUBIN instead.)</p>
+<div class="callout"><p><b>Where this book's SASS comes from.</b> The driver's JIT output is not easy to dump, so the capture harness
+ran the standalone <code>ptxas -arch=sm_89 -v</code> on the exact PTX the driver received and disassembled the result with
+<code>cuobjdump -sass</code>. tinygrad does the equivalent at <code>DEBUG=7</code>
+(<code>cuda_disassemble</code>: ptxas, then nvdisasm, <a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L38"></a>). The register counts
+quoted below are the <code>ptxas -v</code> lines in the "ptxas -v" tabs.</p></div>
+<p><b>Caching.</b> <code>compile_cached</code> <a class="src" data-src="tinygrad/device.py#L307"></a> looks the source string up in a
+SQLite database before compiling. The key is the full source text, the table is named after the compiler and arch
+(<code>compile_cuda_sm_89_22</code>, <a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L54"></a>, plus the
+cache <code>VERSION</code> suffix <a class="src" data-src="tinygrad/helpers.py#L400"></a>), and the database lives
+at <code>~/.cache/tinygrad/cache.db</code> unless <code>CACHEDB</code> says otherwise
+<a class="src" data-src="tinygrad/helpers.py#L398"></a>. <code>CCACHE=0</code> turns it off <a class="src" data-src="tinygrad/helpers.py#L279"></a>.
+Above it sits an in-memory cache keyed on the AST, renderer and every config variable that changes code generation
+(<code>to_program_cache</code>, <a class="src" data-src="tinygrad/codegen/__init__.py#L499"></a>), so a kernel seen before in the same
+process skips all of codegen, not just the compile.</p>
+
+<h2>Line by line: C, PTX and SASS</h2>
+<p>Here is the add kernel in all three languages, from the captures. Hover a line of the CUDA C to see the PTX and SASS it became;
+hover a PTX or SASS line to go the other way. Switch routes to compare with tinygrad's own PTX renderer, which the next section
+introduces. I built the correspondence by hand by reading the registers through each listing.</p>
+<div id="c9-linked" class="reveal"></div>
+<p>Things to look for, NVRTC route first:</p>
+<ul>
+<li><b>Parameters live in constant memory.</b> PTX loads them with <code>ld.param.u64</code>. In SASS there is no load at all: kernel
+arguments sit in constant bank 0 starting at offset 0x160 on this architecture, and an instruction can read <code>c[0x0][0x160]</code>
+directly as an operand. data0 is <code>c[0x0][0x160]</code>, data1 <code>0x168</code>, data2 <code>0x170</code>, 8 bytes each.
+That is also why ptxas reports <code>376 bytes cmem[0]</code> here: 0x160 + 3·8 = 376. The two-argument exp kernel of chapter 8
+reports 368.</li>
+<li><b>Special registers.</b> <code>%ctaid.x</code> and <code>%tid.x</code> become <code>S2R R0, SR_CTAID.X</code> and
+<code>S2R R3, SR_TID.X</code>, reads of per-thread system registers.</li>
+<li><b>Address arithmetic gets fused.</b> <code>shl, shl, add, mul.wide</code> become <code>LEA</code>, <code>SHF.L.U32</code> and
+one <code>IMAD.WIDE</code> per pointer, which computes the 64-bit <code>base + index·4</code> in one instruction with the base
+taken straight from the constant bank. The <code>cvta.to.global</code> conversions vanish.</li>
+<li><b>Vectors become register quads.</b> <code>ld.global.v4.f32 {%f1, %f2, %f3, %f4}</code> is <code>LDG.E.128 R8</code>, which
+writes R8, R9, R10 and R11. The four <code>FADD</code> leave their results in R8..R11, and <code>STG.E.128 [R6.64], R8</code> stores
+the quad. <code>.E</code> means a 64-bit address; <code>ULDC.64 UR4, c[0x0][0x118]</code> loads the memory descriptor those
+instructions use implicitly.</li>
+<li><b>Housekeeping.</b> <code>MOV R1, c[0x0][0x28]</code> initializes the stack pointer (unused here), <code>EXIT</code> ends the
+thread, and <code>BRA</code> to its own address plus the trailing <code>NOP</code>s are padding that is never executed.</li>
+</ul>
+<p>The SASS listing hides the other half of each instruction: the control bits. Every 128-bit SASS instruction carries scheduling
+information that ptxas computes (stall cycles, barrier indices for variable-latency results like loads, register reuse hints).
+cuobjdump shows only the reuse hints, as the <code>.reuse</code> suffix in <code>IMAD.WIDE R4, R6.reuse, R7.reuse, c[0x0][0x170]</code>
+above: the operand collector may keep R6 and R7 for the next instruction instead of reading the register file again. Choosing
+those bits and the instruction order is the part of ptxas that has no counterpart in the PTX.</p>
+
+<h2>tinygrad's own PTX renderer</h2>
+<p>tinygrad can skip C altogether. <code>DEV=CUDA:PTX</code> picks the second renderer registered for the CUDA device
+(<code>[CUDARenderer, PTXRenderer, NVCCRenderer]</code>, <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L121"></a>; selection by
+name in <a class="src" data-src="tinygrad/device.py#L371"></a>). <code>PTXRenderer</code> <a class="src" data-src="tinygrad/renderer/ptx.py#L137"></a>
+prints PTX assembly from the same linear uops, and its "compiler" is a text substitution: <code>PTXCompiler.compile</code> replaces
+<code>TARGET</code> with the arch and <code>VERSION</code> with the PTX ISA version (7.8 for sm_89)
+<a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L82"></a>. No NVRTC is involved; the driver's ptxas does all the
+compiling.</p>
+<div class="code-compare" data-left="add_ptx/cuda|0|ptx" data-right="add_ptx/ptx|0|ptx" data-labels="PTX from NVRTC (via CUDA C)|PTX from tinygrad's PTXRenderer"></div>
+<p>The two are recognizably the same program, written by very different authors:</p>
+<ul>
+<li><b>Register names.</b> NVVM numbers registers per type (<code>%r5</code>, <code>%f17</code>, <code>%rd8</code>). tinygrad names
+them <code>%{prefix}_{type}_{n}</code> after the UOp that made them, <code>%alu_f32_0</code>, <code>%val_f32_4</code>,
+<code>%bidx_u64_1</code> (the <code>ssa</code> helper, <a class="src" data-src="tinygrad/renderer/ptx.py#L181"></a>), and SPECIALs keep
+their names, <code>%gidx0</code> and <code>%lidx0</code>. Both are virtual registers: PTX has unlimited registers, and ptxas does the
+real allocation.</li>
+<li><b>No optimization.</b> Every CAST of a CONST becomes a <code>mov</code>, even ones nothing reads: <code>mov.b32 %cast_s32_0,
+1048576</code> is the buffer size from the PARAM, and <code>%cast_s32_5..8</code> are the lane indices 0..3 of the INDEX uops. Every
+INDEX recomputes its address with <code>cvt.s64.s32</code> and <code>mad.lo.s64 addr, idx, 4, base</code>
+<a class="src" data-src="tinygrad/renderer/ptx.py#L88"></a>.</li>
+<li><b>MULACC.</b> PTXRenderer lists <code>MULACC</code> among its ops, so the late decompositions fused <code>(gidx0&lt;&lt;7) +
+…</code> into <code>mad.lo.s32 %alu_s32_1, %gidx0, %cast_s32_4, %alu_s32_0</code>, a multiply by 128 and an add in one
+instruction (<a class="src" data-src="tinygrad/codegen/decomp/op.py#L132"></a>). The C renderer does not list MULACC and leaves fusion to
+the compiler.</li>
+<li><b>.maxntid 32</b> plays the role of <code>__launch_bounds__(32)</code> <a class="src" data-src="tinygrad/renderer/ptx.py#L170"></a>.</li>
+</ul>
+<p>The results:</p>
+<div class="bars" data-keys="add_ptx/cuda,add_ptx/ptx,sum_rows_ptx/cuda,sum_rows_ptx/ptx" data-labels="add: CUDA C|add: tinygrad PTX|sum_rows: CUDA C|sum_rows: tinygrad PTX"></div>
+<p>For <code>add</code> the difference is noise: 22.46 vs 22.53 µs. ptxas threw away the dead <code>mov</code>s and fused the
+address math; the switch above shows the only real difference, 24 instructions instead of 19 and 20 registers instead of 18. The five
+extra instructions handle the 64-bit sign extension: <code>SHF.R.S32.HI R0, RZ, 0x1f, R6</code> makes the high word of the index,
+<code>SHF.L.U32 R17, R0, 0x2</code> scales it by 4, and one <code>IADD3</code> per pointer adds it into the high half of the
+<code>IMAD.WIDE.U32</code> result. That is needed because tinygrad's PTX says <code>cvt.s64.s32</code> then a 64-bit multiply-add, while NVVM used
+<code>mul.wide.s32</code>, which ptxas maps onto <code>IMAD.WIDE</code> directly.</p>
+
+<h3>Where the routes diverge: sum_rows</h3>
+<p>The reduction shows a bigger gap: 25.54 vs 27.65 µs, and 361 vs 1001 lines of SASS for the same 64-iteration loop.</p>
+<div class="code-compare" data-left="sum_rows_ptx/cuda|0|sass" data-right="sum_rows_ptx/ptx|0|sass" data-labels="SASS via CUDA C (NVRTC)|SASS via tinygrad PTX" data-highlight="LDG"></div>
+<p>Both versions were fully unrolled by ptxas (64 <code>LDG.E</code> each). On the left, all 64 loads share one base register:
+<code>LDG.E R62, [R2.64+0x4]</code>, <code>[R2.64+0x8]</code>, … with the offset folded into the instruction. On the right, every load
+has its own index add (<code>IADD3 R74, R4, 0x1</code>), <code>SHF.R.S32.HI</code>, <code>IMAD.WIDE.U32</code>,
+<code>SHF.L.U32</code> and another add for the high word. The reason is integer semantics. In C, signed overflow is undefined, so NVVM may assume
+<code>(lidx0&lt;&lt;6)+Ridx0+(gidx0&lt;&lt;10)</code> never wraps and turn <code>base + 4·(i + k)</code> into <code>(base + 4·i) +
+4·k</code>. tinygrad's PTX computes the index with 32-bit <code>mad.lo.s32</code>/<code>add.s32</code>, which is defined to wrap modulo 2^32, then sign-extends with
+<code>cvt.s64.s32</code>. ptxas must honour the wrap, so it cannot pull the constant out, and it rebuilds the 64-bit address for every
+element.</p>
+<div class="split">
+<div class="sass-mix" data-key="sum_rows_ptx/cuda" data-title="SASS mix, sum_rows via CUDA C"></div>
+<div class="sass-mix" data-key="sum_rows_ptx/ptx" data-title="SASS mix, sum_rows via tinygrad PTX"></div>
+</div>
+<p>The tinygrad PTX itself is shorter (76 lines vs NVRTC's 204) because it keeps the loops as loops: a RANGE becomes
+<code>mov ridx, -1; bra END; LOOP: …; END: add 1; setp.lt; @p bra LOOP</code> <a class="src" data-src="tinygrad/renderer/ptx.py#L122"></a>,
+and the gated store is <code>@!%alu_pred_0 bra IF_…</code> around the <code>st.global</code>
+<a class="src" data-src="tinygrad/renderer/ptx.py#L131"></a>. All the unrolling happened in ptxas.</p>
+
+<h3>matmul: the association of floating-point sums</h3>
+<p>The matmul kernel shows a subtler difference, and it is not in the PTX renderer. 684.03 vs 690.18 µs, 56 registers each, but the
+inner loop's float math differs: 64 <code>FFMA</code> via CUDA C, versus 48 <code>FFMA</code> + 16 <code>FMUL</code> + 16
+<code>FADD</code> via tinygrad PTX.</p>
+<div class="code-compare" data-left="matmul_ptx/cuda|0|source" data-right="matmul_ptx/ptx|0|ptx" data-labels="CUDA C|tinygrad PTX" data-highlight="buf0\+0\) = |reg_f32_0,|%alu_f32_[0-4],"></div>
+<p>In the uops, each accumulator update is <code>acc + (a0·b0 + a1·b1 + a2·b2 + a3·b3)</code>: the four products are summed first and
+then added to the accumulator. tinygrad's PTX renders exactly that, and after MULACC fusion it is one <code>mul.f32</code>, three
+<code>fma.rn.f32</code> and an <code>add.f32</code> into <code>%reg_f32_0</code>. The C renderer, though, strips parentheses from
+nested additions <a class="src" data-src="tinygrad/renderer/cstyle.py#L64"></a> and prints
+<code>((*(buf0+0))+(val3.x*val7.x)+(val3.y*val4.x)+…)</code>. C parses that left to right, as
+<code>(((acc + a0·b0) + a1·b1) + …)</code>, which is a different association, and one that NVVM can contract into four FFMAs
+chained through the accumulator. Floating-point addition is not associative, so neither compiler may change the order the text
+gives it. The two kernels compute slightly different sums: the largest errors against numpy are 2.29e-4 (C) and 1.53e-4 (PTX), both
+well inside the tolerance.</p>
+<div class="bars" data-keys="matmul_ptx/cuda,matmul_ptx/ptx" data-labels="matmul: CUDA C|matmul: tinygrad PTX"></div>
+<p>The time difference is under 1%, because this matmul is limited by its loads, not by the 50 extra instructions per iteration (134 vs 84 in the inner loop: 16 more float ops, the rest
+64-bit address math).</p>
+
+<h2>The lowering ladder</h2>
+<p>To close the tinygrad side, follow single pieces of the add kernel down all four levels. Each strand starts as linear uops,
+becomes a C expression, then PTX, then SASS. Press play to watch them descend, or pick a strand.</p>
+<div id="c9-ladder" class="reveal"></div>
+<p>The ratio of lines changes in both directions. Index math expands from C to PTX (one C line, four PTX instructions) and contracts
+again in SASS (two instructions). Loads and stores keep a near one-to-one shape, because memory operations are what the program is
+about and no compiler may drop or merge them freely. The adds map one to one all the way down. Overall, 47 uops became 6 lines of C
+body, 23 PTX instructions and 19 SASS instructions.</p>
+
+<h2>PyTorch's route: Triton, MLIR and LLVM</h2>
+<div class="callout torch"><p><code>torch.compile</code> reaches the same hardware by a third road. Inductor writes a Triton kernel in
+Python; Triton parses it to <b>TTIR</b> (an MLIR dialect of tensor ops), lowers that to <b>TTGIR</b>, which assigns a layout
+saying which thread owns which elements, then to <b>LLVM IR</b>, and LLVM's <b>NVPTX backend</b> prints PTX. ptxas finishes the job,
+as in tinygrad.</p></div>
+<svg class="c9-route" viewBox="0 0 960 190">
+  <defs><marker id="c9a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#55667a"/></marker></defs>
+  <g stroke="#55667a" stroke-width="1.6" fill="none" marker-end="url(#c9a)">
+    <path d="M110 40H170"/><path d="M290 40H350"/><path d="M470 40H530"/><path d="M650 40H710"/>
+    <path d="M110 40 C140 40 140 100 170 100"/><path d="M290 100H660 C690 100 685 40 710 40"/>
+    <path d="M110 160H170"/><path d="M290 160H350"/><path d="M470 160H530"/><path d="M650 160 C680 160 680 40 710 40"/>
+  </g>
+  <g>
+    <rect x="10" y="22" width="100" height="36" rx="8" fill="#1c2430" stroke="var(--s-codegen)"/><text x="60" y="44" text-anchor="middle">linear uops</text>
+    <rect x="170" y="22" width="120" height="36" rx="8" fill="#1c2430" stroke="var(--s-render)"/><text x="230" y="38" text-anchor="middle">CUDA C</text><text class="sub" x="230" y="52" text-anchor="middle">CUDARenderer</text>
+    <rect x="350" y="22" width="120" height="36" rx="8" fill="#1c2430" stroke="var(--s-compile)"/><text x="410" y="38" text-anchor="middle">NVRTC</text><text class="sub" x="410" y="52" text-anchor="middle">NVVM (LLVM-based)</text>
+    <rect x="530" y="22" width="120" height="36" rx="8" fill="#1c2430" stroke="var(--s-compile)"/><text x="590" y="44" text-anchor="middle">PTX (.version 9.0)</text>
+    <rect x="710" y="22" width="110" height="36" rx="8" fill="#1c2430" stroke="var(--s-run)"/><text x="765" y="38" text-anchor="middle">ptxas</text><text class="sub" x="765" y="52" text-anchor="middle">in the driver</text>
+    <rect x="850" y="22" width="100" height="36" rx="8" fill="#1c2430" stroke="var(--s-run)"/><text x="900" y="44" text-anchor="middle">SASS</text>
+    <rect x="170" y="82" width="120" height="36" rx="8" fill="#1c2430" stroke="var(--s-render)"/><text x="230" y="98" text-anchor="middle">PTX (.version 7.8)</text><text class="sub" x="230" y="112" text-anchor="middle">PTXRenderer</text>
+    <rect x="10" y="142" width="100" height="36" rx="8" fill="#1c2430" stroke="#ee4c2c"/><text x="60" y="158" text-anchor="middle">Triton Python</text><text class="sub" x="60" y="172" text-anchor="middle">from Inductor</text>
+    <rect x="170" y="142" width="120" height="36" rx="8" fill="#1c2430" stroke="#ee4c2c"/><text x="230" y="158" text-anchor="middle">TTIR → TTGIR</text><text class="sub" x="230" y="172" text-anchor="middle">MLIR, layouts</text>
+    <rect x="350" y="142" width="120" height="36" rx="8" fill="#1c2430" stroke="#ee4c2c"/><text x="410" y="164" text-anchor="middle">LLVM IR</text>
+    <rect x="530" y="142" width="120" height="36" rx="8" fill="#1c2430" stroke="#ee4c2c"/><text x="590" y="158" text-anchor="middle">PTX (.version 8.8)</text><text class="sub" x="590" y="172" text-anchor="middle">LLVM NVPTX</text>
+  </g>
+<path d="M820 40H850" stroke="#55667a" stroke-width="1.6" marker-end="url(#c9a)"/>
+</svg>
+<p>The add kernel at each Triton stage:</p>
+<div class="torch-view" data-key="add/torch" data-tabs="output,ttir,ttgir,llir,ptx,sass" data-tab="ttgir" data-highlight="blocked|sizePerThread|ld\.global\.v4|LDG|FADD|reqntid"></div>
+<ul>
+<li>In <b>TTGIR</b> the tensor of 1024 offsets gets the layout <code>#ttg.blocked&lt;{sizePerThread = [4], threadsPerWarp = [32],
+warpsPerCTA = [4]}&gt;</code>: each thread owns 4 consecutive floats. That is the same decision tinygrad's <code>UPCAST 4</code> makes,
+expressed as a layout instead of a loop transformation. With 128 threads and 1024 elements, each thread handles two chunks of 4.</li>
+<li>The <b>LLVM IR</b> already contains the vector load as inline PTX assembly (<code>ld.global.v4.b32</code>) emitted by Triton's
+lowering, not chosen by LLVM.</li>
+<li>The <b>PTX</b> header says <code>Generated by LLVM NVPTX Back-End</code> and <code>.reqntid 128</code>. Parameter names,
+<code>.loc</code> line info pointing back into the Python file, and debug sections make it long, but the instructions are the same
+family as NVRTC's (NVRTC's NVVM is itself built on LLVM).</li>
+<li>Inductor compiled the kernel twice during autotuning, with 4 and 8 warps; the capture keeps both (pick one in the drop-down).
+The 4-warp kernel is the one above: <code>LDG.E.128</code>, <code>FADD</code>, <code>STG.E.128</code>. The 8-warp one has
+<code>XBLOCK</code> 512 and <code>sizePerThread = [2]</code>, so each thread moves 2 floats with <code>LDG.E.64</code> and
+<code>STG.E.64</code>.</li>
+</ul>
+<p>So the three routes differ in who writes the text and which optimizer sees it first, but all of them hand ptxas a short, regular
+program, and ptxas produces near-identical code. Most of the performance was decided earlier, in the choice of what each thread does
+(chapter 6), not in this last mile.</p>
+<div class="callout warn"><p>Inductor's add is reported at 7.1 µs by torch.profiler, against tinygrad's 22.46 µs (add_ptx/cuda; 21.57 µs in add/default) from CUDA events.
+The torch number is measured differently and is faster than the L4's DRAM can move 12 MB, so the data was likely resident in the 48 MB
+L2 cache. Don't read it as a 3× win for Triton's code; the SASS says the kernels are equivalent.</p></div>
+
+<h2>Summary</h2>
+<ul>
+<li><code>linearize</code> orders the graph by loop depth and op priority while staying topologically valid; gated stores become
+<code>IF</code>/<code>ENDIF</code>.</li>
+<li><code>CUDARenderer</code> is a pattern matcher producing strings: names by op, single-use values inlined,
+<code>__launch_bounds__</code> from the local size, vectors as <code>float4</code>, gates as <code>?:</code> and <code>if</code>.</li>
+<li>NVRTC compiles with just <code>--gpu-architecture=sm_89</code> (plus <code>--minimal</code>) to PTX; the driver's ptxas makes
+SASS at module load. Compiled sources are cached in SQLite, keyed by the full source text.</li>
+<li><code>DEV=CUDA:PTX</code> prints PTX directly from uops: unoptimized, readable names, loops kept as branches. ptxas cleans it up:
+add 22.46 vs 22.53 µs, matmul 684 vs 690 µs. Where 32-bit index wraparound blocks address folding, as in sum_rows, it costs more:
+25.54 vs 27.65 µs.</li>
+<li>In SASS, kernel arguments are constant-bank operands (<code>c[0x0][0x160]</code>…), thread ids come from <code>S2R</code>, vectors
+are register quads written by <code>LDG.E.128</code>, and address math collapses into <code>LEA</code>/<code>IMAD.WIDE</code>.</li>
+<li>Triton reaches PTX through MLIR and LLVM's NVPTX backend; the SASS it ends with looks like tinygrad's.</li>
+</ul>
+<p>The next chapter covers what happens after the binary exists: launching it, the CUDA graphs TinyJit builds from many launches, and
+how autograd produces the kernels of a backward pass.</p>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch09.js"></script></body></html>

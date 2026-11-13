@@ -1,0 +1,957 @@
+{
+ "example": "broadcast_add",
+ "variant": "default",
+ "device": "CUDA",
+ "arch": "sm_89",
+ "chapter": 3,
+ "env": {
+  "DEV": "CUDA"
+ },
+ "tinygrad_code": "\"broadcast_add\": dict(chapter=3, inputs={\"a\": _f32(1024, 1024), \"b\": _f32(1024)},\n                        tg=lambda T: T[\"a\"] + T[\"b\"].reshape(1, 1024), ref=lambda N: N[\"a\"] + N[\"b\"][None, :],\n                        torch=lambda X: X[\"a\"] + X[\"b\"][None, :]),",
+ "tensor_graph": {
+  "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc5 = UOp.new_buffer('CUDA', 1024, dtypes.float, 3)\nc7 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc9 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))+UOp(Ops.RESHAPE, dtypes.float, (c5, c7))\nast = c9.sink()",
+  "lines": 6,
+  "clipped": false
+ },
+ "passes": [
+  {
+   "stage": "tensor",
+   "name": "number the uops",
+   "kernel": null,
+   "nodes": 11,
+   "changed": true,
+   "ms": 0.071,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc5 = UOp.new_buffer('CUDA', 1024, dtypes.float, 3)\nc7 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc9 = (UOp(Ops.RESHAPE, dtypes.float, (c1, c3))+UOp(Ops.RESHAPE, dtypes.float, (c5, c7))).rtag((0,))\nast = c9.sink()",
+    "lines": 6,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "early transform tensor graph",
+   "kernel": null,
+   "nodes": 15,
+   "changed": true,
+   "ms": 0.403,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 4)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc4 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))\nc5 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc7 = UOp.new_buffer('CUDA', 1024, dtypes.float, 3)\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc11 = UOp(Ops.RESHAPE, dtypes.float, (c5, c3))+UOp(Ops.RESHAPE, dtypes.float, (c7, c9))\nc13 = c4.after(c4.store(c11)).rtag((0,))\nast = c13.sink()",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "finalize call",
+   "kernel": null,
+   "nodes": 15,
+   "changed": true,
+   "ms": 0.181,
+   "ir": {
+    "text": "c1 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 4)\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc4 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))\nc5 = UOp.new_buffer('CUDA', 1048576, dtypes.float, 1)\nc7 = UOp.new_buffer('CUDA', 1024, dtypes.float, 3)\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc11 = UOp(Ops.RESHAPE, dtypes.float, (c5, c3))+UOp(Ops.RESHAPE, dtypes.float, (c7, c9))\nc13 = c4.after(c4.store(c11))\nast = c13.sink()",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "tensor",
+   "name": "replace bufs",
+   "kernel": null,
+   "nodes": 15,
+   "changed": true,
+   "ms": 0.189,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc4 = UOp(Ops.RESHAPE, dtypes.float, (c1, c3))\nc5 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc7 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc11 = UOp(Ops.RESHAPE, dtypes.float, (c5, c3))+UOp(Ops.RESHAPE, dtypes.float, (c7, c9))\nc13 = c4.after(c4.store(c11))\nast = c13.sink()",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "multi_pm",
+   "kernel": null,
+   "nodes": 15,
+   "changed": false,
+   "ms": 0.05
+  },
+  {
+   "stage": "schedule",
+   "name": "earliest rewrites",
+   "kernel": null,
+   "nodes": 15,
+   "changed": true,
+   "ms": 0.232,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1024, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc5 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc7 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc9 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(1024, dtypes.weakint)))\nc11 = UOp(Ops.RESHAPE, dtypes.float, (c5, c3))+UOp(Ops.RESHAPE, dtypes.float, (c7, c9))\nc13 = c1.after(UOp(Ops.RESHAPE, dtypes.float, (c1, c3)).store(c11))\nast = c13.sink()",
+    "lines": 8,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "convert copy to store",
+   "kernel": null,
+   "nodes": 15,
+   "changed": false,
+   "ms": 0.044
+  },
+  {
+   "stage": "schedule",
+   "name": "get realize",
+   "kernel": null,
+   "nodes": 15,
+   "changed": false,
+   "ms": 0.046
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 3,
+   "changed": true,
+   "ms": 4.369,
+   "ir": {
+    "text": "c1 = UOp.range(1024, 0, AxisType.PLACEHOLDER)\nast = c1.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 6,
+   "changed": true,
+   "ms": 11.343,
+   "ir": {
+    "text": "c1 = UOp.range(1024, 0, AxisType.PLACEHOLDER)\nc3 = UOp.range(1024, 1, AxisType.PLACEHOLDER)\nc4 = c1*UOp.const(1024, dtypes.weakint)+c3\nast = c4.sink()",
+    "lines": 4,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "apply rangeify",
+   "kernel": null,
+   "nodes": 17,
+   "changed": true,
+   "ms": 0.686,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 0, AxisType.WEAK)\nc5 = UOp.range(1024, 1, AxisType.WEAK)\nc6 = c3*UOp.const(1024, dtypes.weakint)+c5\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc10 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc12 = c8.index(c6)+c10.index(c5)\nc14 = c1.index(c6).store(c12).end(c3, c5)\nc15 = c1.after(c14)\nast = c15.sink()",
+    "lines": 10,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "add device to deviceless",
+   "kernel": null,
+   "nodes": 17,
+   "changed": false,
+   "ms": 0.051
+  },
+  {
+   "stage": "schedule",
+   "name": "symbolic+reduce_collapse+debuf",
+   "kernel": null,
+   "nodes": 17,
+   "changed": false,
+   "ms": 0.14
+  },
+  {
+   "stage": "schedule",
+   "name": "limit buffers",
+   "kernel": null,
+   "nodes": 17,
+   "changed": false,
+   "ms": 0.856
+  },
+  {
+   "stage": "schedule",
+   "name": "stage to store",
+   "kernel": null,
+   "nodes": 17,
+   "changed": true,
+   "ms": 0.192,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA')).rtag(())\nc3 = UOp.range(1024, 0, AxisType.WEAK).rtag(())\nc5 = UOp.range(1024, 1, AxisType.WEAK).rtag(())\nc6 = c3*UOp.const(1024, dtypes.weakint)+c5\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA')).rtag(())\nc10 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA')).rtag(())\nc12 = c8.index(c6)+c10.index(c5)\nc14 = c1.index(c6).store(c12).end(c3, c5)\nc15 = c1.after(c14)\nast = c15.sink()",
+    "lines": 10,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "kernel split",
+   "kernel": null,
+   "nodes": 15,
+   "changed": true,
+   "ms": 0.462,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 0, AxisType.WEAK)\nc5 = UOp.range(1024, 1, AxisType.WEAK)\nc6 = c3*UOp.const(1024, dtypes.weakint)+c5\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc10 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc12 = c8.index(c6)+c10.index(c5)\nast = c1.index(c6).store(c12).end(c3, c5)",
+    "lines": 8,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "split kernels",
+   "kernel": null,
+   "nodes": 22,
+   "changed": true,
+   "ms": 0.799,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "remove indexing from call args",
+   "kernel": null,
+   "nodes": 22,
+   "changed": false,
+   "ms": 0.031
+  },
+  {
+   "stage": "schedule",
+   "name": "schedule to linear",
+   "kernel": null,
+   "nodes": 25,
+   "changed": true,
+   "ms": 22.72,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "params to buffers",
+   "kernel": null,
+   "nodes": 21,
+   "changed": true,
+   "ms": 0.036,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "resolve linear call",
+   "kernel": null,
+   "nodes": 21,
+   "changed": true,
+   "ms": 0.175,
+   "ir": {
+    "text": "<pyrender failed: call can't be pyrendered>",
+    "lines": 1,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "create COPY kernels for SDMA",
+   "kernel": null,
+   "nodes": 21,
+   "changed": false,
+   "ms": 0.529
+  },
+  {
+   "stage": "codegen",
+   "name": "multi_pm",
+   "kernel": 0,
+   "nodes": 16,
+   "changed": false,
+   "ms": 0.057,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 0, AxisType.WEAK)\nc5 = UOp.range(1024, 1, AxisType.WEAK)\nc6 = c3*UOp.const(1024, dtypes.weakint)+c5\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc10 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc12 = c8.index(c6)+c10.index(c5)\nc14 = c1.index(c6).store(c12).end(c3, c5)\nast = c14.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 9,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "early movement ops",
+   "kernel": 0,
+   "nodes": 16,
+   "changed": false,
+   "ms": 0.067
+  },
+  {
+   "stage": "codegen",
+   "name": "load collapse",
+   "kernel": 0,
+   "nodes": 16,
+   "changed": false,
+   "ms": 0.042
+  },
+  {
+   "stage": "codegen",
+   "name": "split ranges",
+   "kernel": 0,
+   "nodes": 16,
+   "changed": false,
+   "ms": 0.45
+  },
+  {
+   "stage": "codegen",
+   "name": "initial symbolic",
+   "kernel": 0,
+   "nodes": 16,
+   "changed": false,
+   "ms": 0.149
+  },
+  {
+   "stage": "codegen",
+   "name": "simplify ranges",
+   "kernel": 0,
+   "nodes": 16,
+   "changed": false,
+   "ms": 3.64
+  },
+  {
+   "stage": "codegen",
+   "name": "flatten range",
+   "kernel": 0,
+   "nodes": 32,
+   "changed": true,
+   "ms": 0.153,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(8, 0, AxisType.GLOBAL)\nc6 = UOp.range(32, 4, AxisType.LOCAL)\nc10 = UOp.range(4, 3, AxisType.UPCAST)\nc15 = UOp.range(64, 1, AxisType.GLOBAL)\nc17 = UOp.range(4, 5, AxisType.LOCAL)\nc20 = UOp.range(4, 2, AxisType.UPCAST)\nc21 = (c15*UOp.const(4, dtypes.weakint)+c17)*UOp.const(4, dtypes.weakint)+c20\nc22 = ((c3*UOp.const(32, dtypes.weakint)+c6)*UOp.const(4, dtypes.weakint)+c10)*UOp.const(1024, dtypes.weakint)+c21\nc24 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc26 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc28 = c24.index(c22)+c26.index(c21)\nc30 = c1.index(c22).store(c28).end(c3, c6, c10, c15, c17, c20)\nast = c30.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 14,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "postopt symbolic",
+   "kernel": 0,
+   "nodes": 35,
+   "changed": true,
+   "ms": 33.009,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(8, 0, AxisType.GLOBAL)\nc7 = UOp.range(32, 4, AxisType.LOCAL)\nc12 = UOp.range(4, 3, AxisType.UPCAST)\nc17 = UOp.range(64, 1, AxisType.GLOBAL)\nc20 = UOp.range(4, 5, AxisType.LOCAL)\nc23 = UOp.range(4, 2, AxisType.UPCAST)\nc24 = c17*UOp.const(16, dtypes.weakint)+c20*UOp.const(4, dtypes.weakint)+c23\nc25 = c3*UOp.const(131072, dtypes.weakint)+c7*UOp.const(4096, dtypes.weakint)+c12*UOp.const(1024, dtypes.weakint)+c24\nc27 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc29 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc31 = c27.index(c25)+c29.index(c24)\nc33 = c1.index(c25).store(c31).end(c3, c7, c12, c17, c20, c23)\nast = c33.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 14,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "expander",
+   "kernel": 0,
+   "nodes": 42,
+   "changed": true,
+   "ms": 1.106,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(8, 0, AxisType.GLOBAL)\nc7 = UOp.range(32, 4, AxisType.LOCAL)\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc17 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(4, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc23 = UOp.range(64, 1, AxisType.GLOBAL)\nc26 = UOp.range(4, 5, AxisType.LOCAL)\nc29 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(4, dtypes.weakint)))\nc31 = c23*UOp.const(16, dtypes.weakint)+c26*UOp.const(4, dtypes.weakint)+UOp(Ops.RESHAPE, dtypes.weakint, (c15, c29))\nc32 = c3*UOp.const(131072, dtypes.weakint)+c7*UOp.const(4096, dtypes.weakint)+UOp(Ops.RESHAPE, dtypes.weakint, (c15, c17))*UOp.const(1024, dtypes.weakint)+c31\nc34 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc36 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc38 = c34.index(c32)+c36.index(c31)\nc40 = c1.index(c32).store(c38).end(c3, c7, c23, c26)\nast = c40.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "remove reduces",
+   "kernel": 0,
+   "nodes": 42,
+   "changed": false,
+   "ms": 1.294
+  },
+  {
+   "stage": "codegen",
+   "name": "add local buffers",
+   "kernel": 0,
+   "nodes": 42,
+   "changed": false,
+   "ms": 0.11
+  },
+  {
+   "stage": "codegen",
+   "name": "add gpudims",
+   "kernel": 0,
+   "nodes": 42,
+   "changed": true,
+   "ms": 5.428,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(8, 'gidx1', dtype=dtypes.weakint)\nc7 = UOp.special(32, 'lidx0', dtype=dtypes.weakint)\nc15 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc17 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(4, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc23 = UOp.special(64, 'gidx0', dtype=dtypes.weakint)\nc26 = UOp.special(4, 'lidx1', dtype=dtypes.weakint)\nc29 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(4, dtypes.weakint)))\nc31 = c23*UOp.const(16, dtypes.weakint)+c26*UOp.const(4, dtypes.weakint)+UOp(Ops.RESHAPE, dtypes.weakint, (c15, c29))\nc32 = c3*UOp.const(131072, dtypes.weakint)+c7*UOp.const(4096, dtypes.weakint)+UOp(Ops.RESHAPE, dtypes.weakint, (c15, c17))*UOp.const(1024, dtypes.weakint)+c31\nc34 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc36 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc38 = c34.index(c32)+c36.index(c31)\nc40 = c1.index(c32).store(c38).end(c3, c7, c23, c26)\nast = c40.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 15,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "*** expand broadcast / add loads",
+   "kernel": 0,
+   "nodes": 54,
+   "changed": true,
+   "ms": 7.518,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(8, 'gidx1', dtype=dtypes.weakint)\nc7 = UOp.special(32, 'lidx0', dtype=dtypes.weakint)\nc13 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(4, dtypes.weakint), UOp.const(1, dtypes.weakint)))\nc18 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(0, dtypes.weakint), UOp.const(1, dtypes.weakint), UOp.const(2, dtypes.weakint), UOp.const(3, dtypes.weakint)))\nc28 = UOp.special(64, 'gidx0', dtype=dtypes.weakint)\nc31 = UOp.special(4, 'lidx1', dtype=dtypes.weakint)\nc34 = UOp(Ops.STACK, dtypes.weakint, (UOp.const(1, dtypes.weakint), UOp.const(4, dtypes.weakint)))\nc37 = UOp(Ops.EXPAND, dtypes.weakint, ((c28*UOp.const(16, dtypes.weakint)+c31*UOp.const(4, dtypes.weakint)), c34))+UOp(Ops.RESHAPE, dtypes.weakint, (c18, c34))\nc40 = UOp(Ops.PERMUTE, dtypes.weakint, (UOp(Ops.EXPAND, dtypes.weakint, (UOp(Ops.RESHAPE, dtypes.weakint, ((UOp(Ops.EXPAND, dtypes.weakint, ((c3*UOp.const(131072, dtypes.weakint)+c7*UOp.const(4096, dtypes.weakint)), c13))+UOp(Ops.RESHAPE, dtypes.weakint, (c18, c13))*UOp(Ops.EXPAND, dtypes.weakint, (UOp.const(1024, dtypes.weakint), c13))), UOp.const(4, dtypes.weakint))), UOp.const(4, dtypes.weakint))),), (1, 0))+UOp(Ops.EXPAND, dtypes.weakint, (UOp(Ops.RESHAPE, dtypes.weakint, (c37, UOp.const(4, dtypes.weakint))), UOp.const(4, dtypes.weakint)))\nc42 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc44 = c42.index(c40).load()\nc45 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc49 = UOp(Ops.EXPAND, dtypes.float, (UOp(Ops.RESHAPE, dtypes.float, (c45.index(c37), UOp.const(4, dtypes.weakint))), UOp.const(4, dtypes.weakint))).load()\nc50 = c44+c49\nc52 = c1.index(c40).store(c50).end(c3, c7, c28, c31)\nast = c52.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 17,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.093,
+   "ir": {
+    "text": "c0 = UOp.const(0, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.097,
+   "ir": {
+    "text": "c0 = UOp.const(1, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.093,
+   "ir": {
+    "text": "c0 = UOp.const(2, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.095,
+   "ir": {
+    "text": "c0 = UOp.const(3, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.12,
+   "ir": {
+    "text": "c0 = UOp.const(0, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.111,
+   "ir": {
+    "text": "c0 = UOp.const(1, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.113,
+   "ir": {
+    "text": "c0 = UOp.const(2, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.111,
+   "ir": {
+    "text": "c0 = UOp.const(3, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.125,
+   "ir": {
+    "text": "c0 = UOp.const(0, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.113,
+   "ir": {
+    "text": "c0 = UOp.const(1, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.111,
+   "ir": {
+    "text": "c0 = UOp.const(2, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.114,
+   "ir": {
+    "text": "c0 = UOp.const(3, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.092,
+   "ir": {
+    "text": "c0 = UOp.const(4, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.133,
+   "ir": {
+    "text": "c0 = UOp.const(5, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.126,
+   "ir": {
+    "text": "c0 = UOp.const(6, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.123,
+   "ir": {
+    "text": "c0 = UOp.const(7, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.111,
+   "ir": {
+    "text": "c0 = UOp.const(8, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.149,
+   "ir": {
+    "text": "c0 = UOp.const(9, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.161,
+   "ir": {
+    "text": "c0 = UOp.const(10, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.148,
+   "ir": {
+    "text": "c0 = UOp.const(11, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.115,
+   "ir": {
+    "text": "c0 = UOp.const(12, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.157,
+   "ir": {
+    "text": "c0 = UOp.const(13, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.152,
+   "ir": {
+    "text": "c0 = UOp.const(14, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "schedule",
+   "name": "reshape",
+   "kernel": null,
+   "nodes": 2,
+   "changed": true,
+   "ms": 0.142,
+   "ir": {
+    "text": "c0 = UOp.const(15, dtypes.weakint)\nast = c0.sink()",
+    "lines": 2,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "devectorize2",
+   "kernel": 0,
+   "nodes": 140,
+   "changed": true,
+   "ms": 20.301,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(8, 'gidx1', dtype=dtypes.weakint)\nc7 = UOp.special(32, 'lidx0', dtype=dtypes.weakint)\nc10 = c3*UOp.const(131072, dtypes.weakint)+c7*UOp.const(4096, dtypes.weakint)\nc12 = UOp.special(64, 'gidx0', dtype=dtypes.weakint)\nc16 = UOp.special(4, 'lidx1', dtype=dtypes.weakint)\nc18 = c12*UOp.const(16, dtypes.weakint)+c16*UOp.const(4, dtypes.weakint)\nc19 = c10+c18\nc21 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc23 = c21.index(c19).load()\nc25 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc27 = c25.index(c18).load()\nc28 = c23+c27\nc31 = c18+UOp.const(1, dtypes.weakint)\nc32 = c10+c31\nc35 = c21.index(c32).load()\nc37 = c25.index(c31).load()\nc38 = c35+c37\nc41 = c18+UOp.const(2, dtypes.weakint)\nc42 = c10+c41\nc45 = c21.index(c42).load()\nc47 = c25.index(c41).load()\nc48 = c45+c47\nc51 = c18+UOp.const(3, dtypes.weakint)\nc52 = c10+c51\nc55 = c21.index(c52).load()\nc57 = c25.index(c51).load()\nc58 = c55+c57\nc60 = c10+UOp.const(1024, dtypes.weakint)\nc61 = c60+c18\nc64 = c21.index(c61).load()\nc65 = c64+c27\nc67 = c60+c31\nc70 = c21.index(c67).load()\nc71 = c70+c37\nc73 = c60+c41\nc76 = c21.index(c73).load()\nc77 = c76+c47\nc79 = c60+c51\nc82 = c21.index(c79).load()\nc83 = c82+c57\nc86 = c10+UOp.const(2048, dtypes.weakint)\nc87 = c86+c18\nc90 = c21.index(c87).load()\nc91 = c90+c27\nc93 = c86+c31\nc96 = c21.index(c93).load()\nc97 = c96+c37\nc99 = c86+c41\nc102 = c21.index(c99).load()\nc103 = c102+c47\nc105 = c86+c51\nc108 = c21.index(c105).load()\nc109 = c108+c57\nc112 = c10+UOp.const(3072, dtypes.weakint)\nc113 = c112+c18\nc116 = c21.index(c113).load()\nc117 = c116+c27\nc119 = c112+c31\nc122 = c21.index(c119).load()\nc123 = c122+c37\nc125 = c112+c41\nc128 = c21.index(c125).load()\nc129 = c128+c47\nc131 = c112+c51\nc134 = c21.index(c131).load()\nc135 = c134+c57\nc138 = UOp(Ops.GROUP, dtypes.void, (c1.index(c19).store(c28), c1.index(c32).store(c38), c1.index(c42).store(c48), c1.index(c52).store(c58), c1.index(c61).store(c65), c1.index(c67).store(c71), c1.index(c73).store(c77), c1.index(c79).store(c83), c1.index(c87).store(c91), c1.index(c93).store(c97), c1.index(c99).store(c103), c1.index(c105).store(c109), c1.index(c113).store(c117), c1.index(c119).store(c123), c1.index(c125).store(c129), c1.index(c131).store(c135))).end(c3, c7, c12, c16)\nast = c138.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 69,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "early symbolic",
+   "kernel": 0,
+   "nodes": 146,
+   "changed": true,
+   "ms": 5.776,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(64, 'gidx0', dtype=dtypes.weakint)\nc7 = UOp.special(4, 'lidx1', dtype=dtypes.weakint)\nc9 = c3*UOp.const(16, dtypes.weakint)+c7*UOp.const(4, dtypes.weakint)\nc11 = UOp.special(8, 'gidx1', dtype=dtypes.weakint)\nc15 = UOp.special(32, 'lidx0', dtype=dtypes.weakint)\nc19 = c9+(c11*UOp.const(131072, dtypes.weakint)+c15*UOp.const(4096, dtypes.weakint))\nc21 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc23 = c21.index(c19).load()\nc25 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc27 = c25.index(c9).load()\nc28 = c23+c27\nc31 = c19+UOp.const(1, dtypes.weakint)\nc34 = c21.index(c31).load()\nc37 = c25.index((c9+UOp.const(1, dtypes.weakint))).load()\nc38 = c34+c37\nc41 = c19+UOp.const(2, dtypes.weakint)\nc44 = c21.index(c41).load()\nc47 = c25.index((c9+UOp.const(2, dtypes.weakint))).load()\nc48 = c44+c47\nc51 = c19+UOp.const(3, dtypes.weakint)\nc54 = c21.index(c51).load()\nc57 = c25.index((c9+UOp.const(3, dtypes.weakint))).load()\nc58 = c54+c57\nc60 = c19+UOp.const(1024, dtypes.weakint)\nc63 = c21.index(c60).load()\nc64 = c63+c27\nc67 = c19+UOp.const(1025, dtypes.weakint)\nc70 = c21.index(c67).load()\nc71 = c70+c37\nc74 = c19+UOp.const(1026, dtypes.weakint)\nc77 = c21.index(c74).load()\nc78 = c77+c47\nc81 = c19+UOp.const(1027, dtypes.weakint)\nc84 = c21.index(c81).load()\nc85 = c84+c57\nc88 = c19+UOp.const(2048, dtypes.weakint)\nc91 = c21.index(c88).load()\nc92 = c91+c27\nc95 = c19+UOp.const(2049, dtypes.weakint)\nc98 = c21.index(c95).load()\nc99 = c98+c37\nc102 = c19+UOp.const(2050, dtypes.weakint)\nc105 = c21.index(c102).load()\nc106 = c105+c47\nc109 = c19+UOp.const(2051, dtypes.weakint)\nc112 = c21.index(c109).load()\nc113 = c112+c57\nc116 = c19+UOp.const(3072, dtypes.weakint)\nc119 = c21.index(c116).load()\nc120 = c119+c27\nc123 = c19+UOp.const(3073, dtypes.weakint)\nc126 = c21.index(c123).load()\nc127 = c126+c37\nc130 = c19+UOp.const(3074, dtypes.weakint)\nc133 = c21.index(c130).load()\nc134 = c133+c47\nc137 = c19+UOp.const(3075, dtypes.weakint)\nc140 = c21.index(c137).load()\nc141 = c140+c57\nc144 = UOp(Ops.GROUP, dtypes.void, (c1.index(c19).store(c28), c1.index(c31).store(c38), c1.index(c41).store(c48), c1.index(c51).store(c58), c1.index(c60).store(c64), c1.index(c67).store(c71), c1.index(c74).store(c78), c1.index(c81).store(c85), c1.index(c88).store(c92), c1.index(c95).store(c99), c1.index(c102).store(c106), c1.index(c109).store(c113), c1.index(c116).store(c120), c1.index(c123).store(c127), c1.index(c130).store(c134), c1.index(c137).store(c141))).end(c11, c15, c3, c7)\nast = c144.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 62,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add images",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": true,
+   "ms": 15.711,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(64, 'gidx0', dtype=dtypes.weakint)\nc7 = UOp.special(4, 'lidx1', dtype=dtypes.weakint)\nc9 = c3*UOp.const(16, dtypes.weakint)+c7*UOp.const(4, dtypes.weakint)\nc11 = UOp.special(8, 'gidx1', dtype=dtypes.weakint)\nc15 = UOp.special(32, 'lidx0', dtype=dtypes.weakint)\nc19 = c9+(c11*UOp.const(131072, dtypes.weakint)+c15*UOp.const(4096, dtypes.weakint))\nc21 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc23 = UOp(Ops.SHRINK, dtypes.float, (c21, c19, UOp.const(4, dtypes.weakint))).load()\nc27 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc29 = UOp(Ops.SHRINK, dtypes.float, (c27, c9, UOp.const(4, dtypes.weakint))).load()\nc30 = c29.index(UOp.const(0, dtypes.weakint))\nc34 = c29.index(UOp.const(1, dtypes.weakint))\nc38 = c29.index(UOp.const(2, dtypes.weakint))\nc42 = c29.index(UOp.const(3, dtypes.weakint))\nc44 = UOp(Ops.STACK, dtypes.float, ((c23.index(UOp.const(0, dtypes.weakint))+c30), (c23.index(UOp.const(1, dtypes.weakint))+c34), (c23.index(UOp.const(2, dtypes.weakint))+c38), (c23.index(UOp.const(3, dtypes.weakint))+c42)))\nc45 = UOp(Ops.SHRINK, dtypes.float, (c1, c19, UOp.const(4, dtypes.weakint))).store(c44)\nc46 = c19+UOp.const(1024, dtypes.weakint)\nc49 = UOp(Ops.SHRINK, dtypes.float, (c21, c46, UOp.const(4, dtypes.weakint))).load()\nc58 = UOp(Ops.STACK, dtypes.float, ((c49.index(UOp.const(0, dtypes.weakint))+c30), (c49.index(UOp.const(1, dtypes.weakint))+c34), (c49.index(UOp.const(2, dtypes.weakint))+c38), (c49.index(UOp.const(3, dtypes.weakint))+c42)))\nc59 = UOp(Ops.SHRINK, dtypes.float, (c1, c46, UOp.const(4, dtypes.weakint))).store(c58)\nc61 = c19+UOp.const(2048, dtypes.weakint)\nc64 = UOp(Ops.SHRINK, dtypes.float, (c21, c61, UOp.const(4, dtypes.weakint))).load()\nc73 = UOp(Ops.STACK, dtypes.float, ((c64.index(UOp.const(0, dtypes.weakint))+c30), (c64.index(UOp.const(1, dtypes.weakint))+c34), (c64.index(UOp.const(2, dtypes.weakint))+c38), (c64.index(UOp.const(3, dtypes.weakint))+c42)))\nc74 = UOp(Ops.SHRINK, dtypes.float, (c1, c61, UOp.const(4, dtypes.weakint))).store(c73)\nc76 = c19+UOp.const(3072, dtypes.weakint)\nc79 = UOp(Ops.SHRINK, dtypes.float, (c21, c76, UOp.const(4, dtypes.weakint))).load()\nc88 = UOp(Ops.STACK, dtypes.float, ((c79.index(UOp.const(0, dtypes.weakint))+c30), (c79.index(UOp.const(1, dtypes.weakint))+c34), (c79.index(UOp.const(2, dtypes.weakint))+c38), (c79.index(UOp.const(3, dtypes.weakint))+c42)))\nc89 = UOp(Ops.SHRINK, dtypes.float, (c1, c76, UOp.const(4, dtypes.weakint))).store(c88)\nc91 = UOp(Ops.GROUP, dtypes.void, (c45, c45, c45, c45, c59, c59, c59, c59, c74, c74, c74, c74, c89, c89, c89, c89)).end(c11, c15, c3, c7)\nast = c91.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 31,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "extra symbolic",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": false,
+   "ms": 0.49
+  },
+  {
+   "stage": "codegen",
+   "name": "lower all index dtypes",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": true,
+   "ms": 7.863,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(64, 'gidx0', dtype=dtypes.int)\nc7 = UOp.special(4, 'lidx1', dtype=dtypes.int)\nc9 = c3*UOp.const(16, dtypes.int)+c7*UOp.const(4, dtypes.int)\nc11 = UOp.special(8, 'gidx1', dtype=dtypes.int)\nc15 = UOp.special(32, 'lidx0', dtype=dtypes.int)\nc19 = c9+(c11*UOp.const(131072, dtypes.int)+c15*UOp.const(4096, dtypes.int))\nc21 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc23 = UOp(Ops.SHRINK, dtypes.float, (c21, c19, UOp.const(4, dtypes.int))).load()\nc27 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.int),), ParamArg(2, dtypes.float, device='CUDA'))\nc29 = UOp(Ops.SHRINK, dtypes.float, (c27, c9, UOp.const(4, dtypes.int))).load()\nc30 = c29.index(UOp.const(0, dtypes.int))\nc34 = c29.index(UOp.const(1, dtypes.int))\nc38 = c29.index(UOp.const(2, dtypes.int))\nc42 = c29.index(UOp.const(3, dtypes.int))\nc44 = UOp(Ops.STACK, dtypes.float, ((c23.index(UOp.const(0, dtypes.int))+c30), (c23.index(UOp.const(1, dtypes.int))+c34), (c23.index(UOp.const(2, dtypes.int))+c38), (c23.index(UOp.const(3, dtypes.int))+c42)))\nc45 = UOp(Ops.SHRINK, dtypes.float, (c1, c19, UOp.const(4, dtypes.int))).store(c44)\nc46 = c19+UOp.const(1024, dtypes.int)\nc49 = UOp(Ops.SHRINK, dtypes.float, (c21, c46, UOp.const(4, dtypes.int))).load()\nc58 = UOp(Ops.STACK, dtypes.float, ((c49.index(UOp.const(0, dtypes.int))+c30), (c49.index(UOp.const(1, dtypes.int))+c34), (c49.index(UOp.const(2, dtypes.int))+c38), (c49.index(UOp.const(3, dtypes.int))+c42)))\nc59 = UOp(Ops.SHRINK, dtypes.float, (c1, c46, UOp.const(4, dtypes.int))).store(c58)\nc61 = c19+UOp.const(2048, dtypes.int)\nc64 = UOp(Ops.SHRINK, dtypes.float, (c21, c61, UOp.const(4, dtypes.int))).load()\nc73 = UOp(Ops.STACK, dtypes.float, ((c64.index(UOp.const(0, dtypes.int))+c30), (c64.index(UOp.const(1, dtypes.int))+c34), (c64.index(UOp.const(2, dtypes.int))+c38), (c64.index(UOp.const(3, dtypes.int))+c42)))\nc74 = UOp(Ops.SHRINK, dtypes.float, (c1, c61, UOp.const(4, dtypes.int))).store(c73)\nc76 = c19+UOp.const(3072, dtypes.int)\nc79 = UOp(Ops.SHRINK, dtypes.float, (c21, c76, UOp.const(4, dtypes.int))).load()\nc88 = UOp(Ops.STACK, dtypes.float, ((c79.index(UOp.const(0, dtypes.int))+c30), (c79.index(UOp.const(1, dtypes.int))+c34), (c79.index(UOp.const(2, dtypes.int))+c38), (c79.index(UOp.const(3, dtypes.int))+c42)))\nc89 = UOp(Ops.SHRINK, dtypes.float, (c1, c76, UOp.const(4, dtypes.int))).store(c88)\nc91 = UOp(Ops.GROUP, dtypes.void, (c45, c45, c45, c45, c59, c59, c59, c59, c74, c74, c74, c74, c89, c89, c89, c89)).end(c11, c15, c3, c7)\nast = c91.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 31,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "final symbolic",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": false,
+   "ms": 0.411
+  },
+  {
+   "stage": "codegen",
+   "name": "cast float alu operands",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": false,
+   "ms": 0.221
+  },
+  {
+   "stage": "codegen",
+   "name": "early decompositions",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": false,
+   "ms": 0.316
+  },
+  {
+   "stage": "codegen",
+   "name": "decomp dtypes",
+   "kernel": 0,
+   "nodes": 93,
+   "changed": false,
+   "ms": 1.259
+  },
+  {
+   "stage": "codegen",
+   "name": "late decompositions",
+   "kernel": 0,
+   "nodes": 94,
+   "changed": true,
+   "ms": 2.265,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(64, 'gidx0', dtype=dtypes.int)\nc7 = UOp.special(4, 'lidx1', dtype=dtypes.int)\nc10 = (c3<<UOp.const(4, dtypes.weakint))+(c7<<UOp.const(2, dtypes.weakint))\nc12 = UOp.special(8, 'gidx1', dtype=dtypes.int)\nc16 = UOp.special(32, 'lidx0', dtype=dtypes.int)\nc20 = c10+((c12<<UOp.const(17, dtypes.weakint))+(c16<<UOp.const(12, dtypes.weakint)))\nc22 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc24 = UOp(Ops.SHRINK, dtypes.float, (c22, c20, UOp.const(4, dtypes.int))).load()\nc28 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.int),), ParamArg(2, dtypes.float, device='CUDA'))\nc30 = UOp(Ops.SHRINK, dtypes.float, (c28, c10, UOp.const(4, dtypes.int))).load()\nc31 = c30.index(UOp.const(0, dtypes.int))\nc35 = c30.index(UOp.const(1, dtypes.int))\nc39 = c30.index(UOp.const(2, dtypes.int))\nc43 = c30.index(UOp.const(3, dtypes.int))\nc45 = UOp(Ops.STACK, dtypes.float, ((c24.index(UOp.const(0, dtypes.int))+c31), (c24.index(UOp.const(1, dtypes.int))+c35), (c24.index(UOp.const(2, dtypes.int))+c39), (c24.index(UOp.const(3, dtypes.int))+c43)))\nc46 = UOp(Ops.SHRINK, dtypes.float, (c1, c20, UOp.const(4, dtypes.int))).store(c45)\nc47 = c20+UOp.const(1024, dtypes.int)\nc50 = UOp(Ops.SHRINK, dtypes.float, (c22, c47, UOp.const(4, dtypes.int))).load()\nc59 = UOp(Ops.STACK, dtypes.float, ((c50.index(UOp.const(0, dtypes.int))+c31), (c50.index(UOp.const(1, dtypes.int))+c35), (c50.index(UOp.const(2, dtypes.int))+c39), (c50.index(UOp.const(3, dtypes.int))+c43)))\nc60 = UOp(Ops.SHRINK, dtypes.float, (c1, c47, UOp.const(4, dtypes.int))).store(c59)\nc62 = c20+UOp.const(2048, dtypes.int)\nc65 = UOp(Ops.SHRINK, dtypes.float, (c22, c62, UOp.const(4, dtypes.int))).load()\nc74 = UOp(Ops.STACK, dtypes.float, ((c65.index(UOp.const(0, dtypes.int))+c31), (c65.index(UOp.const(1, dtypes.int))+c35), (c65.index(UOp.const(2, dtypes.int))+c39), (c65.index(UOp.const(3, dtypes.int))+c43)))\nc75 = UOp(Ops.SHRINK, dtypes.float, (c1, c62, UOp.const(4, dtypes.int))).store(c74)\nc77 = c20+UOp.const(3072, dtypes.int)\nc80 = UOp(Ops.SHRINK, dtypes.float, (c22, c77, UOp.const(4, dtypes.int))).load()\nc89 = UOp(Ops.STACK, dtypes.float, ((c80.index(UOp.const(0, dtypes.int))+c31), (c80.index(UOp.const(1, dtypes.int))+c35), (c80.index(UOp.const(2, dtypes.int))+c39), (c80.index(UOp.const(3, dtypes.int))+c43)))\nc90 = UOp(Ops.SHRINK, dtypes.float, (c1, c77, UOp.const(4, dtypes.int))).store(c89)\nc92 = UOp(Ops.GROUP, dtypes.void, (c46, c46, c46, c46, c60, c60, c60, c60, c75, c75, c75, c75, c90, c90, c90, c90)).end(c12, c16, c3, c7)\nast = c92.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 31,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "move gates from index",
+   "kernel": 0,
+   "nodes": 94,
+   "changed": false,
+   "ms": 2.579
+  },
+  {
+   "stage": "codegen",
+   "name": "final rewrite",
+   "kernel": 0,
+   "nodes": 91,
+   "changed": true,
+   "ms": 2.955,
+   "ir": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.special(64, 'gidx0', dtype=dtypes.int)\nc6 = UOp.special(4, 'lidx1', dtype=dtypes.int)\nc9 = (c3<<UOp.const(4, dtypes.int))+(c6<<UOp.const(2, dtypes.int))\nc11 = UOp.special(8, 'gidx1', dtype=dtypes.int)\nc15 = UOp.special(32, 'lidx0', dtype=dtypes.int)\nc19 = c9+((c11<<UOp.const(17, dtypes.int))+(c15<<UOp.const(12, dtypes.int)))\nc21 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.int),), ParamArg(1, dtypes.float, device='CUDA'))\nc23 = UOp(Ops.SHRINK, dtypes.float, (c21, c19, UOp.const(4, dtypes.int))).load()\nc27 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.int),), ParamArg(2, dtypes.float, device='CUDA'))\nc29 = UOp(Ops.SHRINK, dtypes.float, (c27, c9, UOp.const(4, dtypes.int))).load()\nc30 = c29.index(UOp.const(0, dtypes.int))\nc34 = c29.index(UOp.const(1, dtypes.int))\nc37 = c29.index(UOp.const(2, dtypes.int))\nc41 = c29.index(UOp.const(3, dtypes.int))\nc43 = UOp(Ops.STACK, dtypes.float, ((c23.index(UOp.const(0, dtypes.int))+c30), (c23.index(UOp.const(1, dtypes.int))+c34), (c23.index(UOp.const(2, dtypes.int))+c37), (c23.index(UOp.const(3, dtypes.int))+c41)))\nc44 = UOp(Ops.SHRINK, dtypes.float, (c1, c19, UOp.const(4, dtypes.int))).store(c43)\nc45 = c19+UOp.const(1024, dtypes.int)\nc48 = UOp(Ops.SHRINK, dtypes.float, (c21, c45, UOp.const(4, dtypes.int))).load()\nc57 = UOp(Ops.STACK, dtypes.float, ((c48.index(UOp.const(0, dtypes.int))+c30), (c48.index(UOp.const(1, dtypes.int))+c34), (c48.index(UOp.const(2, dtypes.int))+c37), (c48.index(UOp.const(3, dtypes.int))+c41)))\nc58 = UOp(Ops.SHRINK, dtypes.float, (c1, c45, UOp.const(4, dtypes.int))).store(c57)\nc60 = c19+UOp.const(2048, dtypes.int)\nc63 = UOp(Ops.SHRINK, dtypes.float, (c21, c60, UOp.const(4, dtypes.int))).load()\nc72 = UOp(Ops.STACK, dtypes.float, ((c63.index(UOp.const(0, dtypes.int))+c30), (c63.index(UOp.const(1, dtypes.int))+c34), (c63.index(UOp.const(2, dtypes.int))+c37), (c63.index(UOp.const(3, dtypes.int))+c41)))\nc73 = UOp(Ops.SHRINK, dtypes.float, (c1, c60, UOp.const(4, dtypes.int))).store(c72)\nc75 = c19+UOp.const(3072, dtypes.int)\nc78 = UOp(Ops.SHRINK, dtypes.float, (c21, c75, UOp.const(4, dtypes.int))).load()\nc87 = UOp(Ops.STACK, dtypes.float, ((c78.index(UOp.const(0, dtypes.int))+c30), (c78.index(UOp.const(1, dtypes.int))+c34), (c78.index(UOp.const(2, dtypes.int))+c37), (c78.index(UOp.const(3, dtypes.int))+c41)))\nc88 = UOp(Ops.SHRINK, dtypes.float, (c1, c75, UOp.const(4, dtypes.int))).store(c87)\nc89 = UOp(Ops.GROUP, dtypes.void, (c44, c44, c44, c44, c58, c58, c58, c58, c73, c73, c73, c73, c88, c88, c88, c88))\nast = c89.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 31,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "casted consts",
+   "kernel": 0,
+   "nodes": 105,
+   "changed": true,
+   "ms": 0.987,
+   "ir": {
+    "text": "c1 = UOp.const(1048576, dtypes.weakint).cast(dtypes.int)\nc2 = UOp(Ops.PARAM, dtypes.float, (c1,), ParamArg(0, dtypes.float, device='CUDA'))\nc5 = UOp(Ops.SPECIAL, dtypes.int, (UOp.const(64, dtypes.weakint).cast(dtypes.int),), 'gidx0')\nc7 = UOp.const(4, dtypes.weakint).cast(dtypes.int)\nc9 = UOp(Ops.SPECIAL, dtypes.int, (c7,), 'lidx1')\nc11 = UOp.const(2, dtypes.weakint).cast(dtypes.int)\nc13 = (c5<<c7)+(c9<<c11)\nc16 = UOp(Ops.SPECIAL, dtypes.int, (UOp.const(8, dtypes.weakint).cast(dtypes.int),), 'gidx1')\nc22 = UOp(Ops.SPECIAL, dtypes.int, (UOp.const(32, dtypes.weakint).cast(dtypes.int),), 'lidx0')\nc27 = c13+((c16<<UOp.const(17, dtypes.weakint).cast(dtypes.int))+(c22<<UOp.const(12, dtypes.weakint).cast(dtypes.int)))\nc29 = UOp(Ops.PARAM, dtypes.float, (c1,), ParamArg(1, dtypes.float, device='CUDA'))\nc31 = UOp(Ops.SHRINK, dtypes.float, (c29, c27, c7)).load()\nc33 = UOp.const(0, dtypes.weakint).cast(dtypes.int)\nc36 = UOp.const(1024, dtypes.weakint).cast(dtypes.int)\nc37 = UOp(Ops.PARAM, dtypes.float, (c36,), ParamArg(2, dtypes.float, device='CUDA'))\nc39 = UOp(Ops.SHRINK, dtypes.float, (c37, c13, c7)).load()\nc40 = c39.index(c33)\nc43 = UOp.const(1, dtypes.weakint).cast(dtypes.int)\nc45 = c39.index(c43)\nc48 = c39.index(c11)\nc51 = UOp.const(3, dtypes.weakint).cast(dtypes.int)\nc53 = c39.index(c51)\nc55 = UOp(Ops.STACK, dtypes.float, ((c31.index(c33)+c40), (c31.index(c43)+c45), (c31.index(c11)+c48), (c31.index(c51)+c53)))\nc56 = UOp(Ops.SHRINK, dtypes.float, (c2, c27, c7)).store(c55)\nc57 = c27+c36\nc60 = UOp(Ops.SHRINK, dtypes.float, (c29, c57, c7)).load()\nc69 = UOp(Ops.STACK, dtypes.float, ((c60.index(c33)+c40), (c60.index(c43)+c45), (c60.index(c11)+c48), (c60.index(c51)+c53)))\nc70 = UOp(Ops.SHRINK, dtypes.float, (c2, c57, c7)).store(c69)\nc73 = c27+UOp.const(2048, dtypes.weakint).cast(dtypes.int)\nc76 = UOp(Ops.SHRINK, dtypes.float, (c29, c73, c7)).load()\nc85 = UOp(Ops.STACK, dtypes.float, ((c76.index(c33)+c40), (c76.index(c43)+c45), (c76.index(c11)+c48), (c76.index(c51)+c53)))\nc86 = UOp(Ops.SHRINK, dtypes.float, (c2, c73, c7)).store(c85)\nc89 = c27+UOp.const(3072, dtypes.weakint).cast(dtypes.int)\nc92 = UOp(Ops.SHRINK, dtypes.float, (c29, c89, c7)).load()\nc101 = UOp(Ops.STACK, dtypes.float, ((c92.index(c33)+c40), (c92.index(c43)+c45), (c92.index(c11)+c48), (c92.index(c51)+c53)))\nc102 = UOp(Ops.SHRINK, dtypes.float, (c2, c89, c7)).store(c101)\nc103 = UOp(Ops.GROUP, dtypes.void, (c56, c56, c56, c56, c70, c70, c70, c70, c86, c86, c86, c86, c102, c102, c102, c102))\nast = c103.sink(arg=KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[33m4\\x1b[0m', axis_types=(), dont_use_locals=False, applied_opts=(Opt(op=OptOps.UPCAST, axis=1, arg=4), Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32), Opt(op=OptOps.LOCAL, axis=1, arg=4)), opts_to_apply=None, estimates=None, beam=0)).rtag(1)",
+    "lines": 38,
+    "clipped": false
+   }
+  },
+  {
+   "stage": "codegen",
+   "name": "add implicit barriers",
+   "kernel": 0,
+   "nodes": 105,
+   "changed": false,
+   "ms": 0.209
+  },
+  {
+   "stage": "codegen",
+   "name": "add control flow",
+   "kernel": 0,
+   "nodes": 105,
+   "changed": false,
+   "ms": 0.236
+  },
+  {
+   "stage": "codegen",
+   "name": "number params with -1",
+   "kernel": 0,
+   "nodes": 105,
+   "changed": false,
+   "ms": 0.678
+  },
+  {
+   "stage": "codegen",
+   "name": "linearize/render",
+   "kernel": 0,
+   "nodes": 110,
+   "changed": true,
+   "ms": 63.781
+  },
+  {
+   "stage": "program",
+   "name": "optimize local size",
+   "kernel": 0,
+   "nodes": 115,
+   "changed": false,
+   "ms": 1.64
+  }
+ ],
+ "kernels": [
+  {
+   "ast": {
+    "text": "c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='CUDA'))\nc3 = UOp.range(1024, 0, AxisType.WEAK)\nc5 = UOp.range(1024, 1, AxisType.WEAK)\nc6 = c3*UOp.const(1024, dtypes.weakint)+c5\nc8 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(1, dtypes.float, device='CUDA'))\nc10 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1024, dtypes.weakint),), ParamArg(2, dtypes.float, device='CUDA'))\nc12 = c8.index(c6)+c10.index(c5)\nc14 = c1.index(c6).store(c12).end(c3, c5)\nast = c14.sink(arg=KernelInfo(name='test', axis_types=(), dont_use_locals=False, applied_opts=(), opts_to_apply=None, estimates=None, beam=0))",
+    "lines": 9,
+    "clipped": false
+   },
+   "name": "E_8_64_32_4_4_4",
+   "function_name": "E_8_64_32_4_4_4",
+   "global_size": [
+    "64",
+    "8",
+    "1"
+   ],
+   "local_size": [
+    "32",
+    "4",
+    "1"
+   ],
+   "applied_opts": [
+    "Opt(op=OptOps.UPCAST, axis=1, arg=4)",
+    "Opt(op=OptOps.UPCAST, axis=0, arg=4)",
+    "Opt(op=OptOps.LOCAL, axis=0, arg=32)",
+    "Opt(op=OptOps.LOCAL, axis=1, arg=4)"
+   ],
+   "estimates": {
+    "ops": "1048576",
+    "lds": "9437184",
+    "mem": "8392704"
+   },
+   "uops": {
+    "text": "   0 Ops.CONST            dtypes.weakint                   []                           1048576\n   1 Ops.CAST             dtypes.int                       ['1048576']                  dtypes.int\n   2 Ops.PARAM            dtypes.float                     [1]                          ParamArg(0, dtypes.float, device='CUDA')\n   3 Ops.PARAM            dtypes.float                     [1]                          ParamArg(1, dtypes.float, device='CUDA')\n   4 Ops.CONST            dtypes.weakint                   []                           1024\n   5 Ops.CAST             dtypes.int                       ['1024']                     dtypes.int\n   6 Ops.PARAM            dtypes.float                     [5]                          ParamArg(2, dtypes.float, device='CUDA')\n   7 Ops.CONST            dtypes.weakint                   []                           64\n   8 Ops.CAST             dtypes.int                       ['64']                       dtypes.int\n   9 Ops.SPECIAL          dtypes.int                       [8]                          gidx0\n  10 Ops.CONST            dtypes.weakint                   []                           8\n  11 Ops.CAST             dtypes.int                       ['8']                        dtypes.int\n  12 Ops.SPECIAL          dtypes.int                       [11]                         gidx1\n  13 Ops.CONST            dtypes.weakint                   []                           32\n  14 Ops.CAST             dtypes.int                       ['32']                       dtypes.int\n  15 Ops.SPECIAL          dtypes.int                       [14]                         lidx0\n  16 Ops.CONST            dtypes.weakint                   []                           4\n  17 Ops.CAST             dtypes.int                       ['4']                        dtypes.int\n  18 Ops.SPECIAL          dtypes.int                       [17]                         lidx1\n  19 Ops.CONST            dtypes.weakint                   []                           2\n  20 Ops.CAST             dtypes.int                       ['2']                        dtypes.int\n  21 Ops.CONST            dtypes.weakint                   []                           12\n  22 Ops.CAST             dtypes.int                       ['12']                       dtypes.int\n  23 Ops.CONST            dtypes.weakint                   []                           17\n  24 Ops.CAST             dtypes.int                       ['17']                       dtypes.int\n  25 Ops.SHL              dtypes.int                       [9, 17]                      None\n  26 Ops.SHL              dtypes.int                       [18, 20]                     None\n  27 Ops.ADD              dtypes.int                       [25, 26]                     None\n  28 Ops.SHL              dtypes.int                       [12, 24]                     None\n  29 Ops.SHL              dtypes.int                       [15, 22]                     None\n  30 Ops.ADD              dtypes.int                       [28, 29]                     None\n  31 Ops.ADD              dtypes.int                       [27, 30]                     None\n  32 Ops.ADD              dtypes.int                       [31, 5]                      None\n  33 Ops.SHRINK           dtypes.float                     [3, 32, 17]                  None\n  34 Ops.LOAD             dtypes.float                     [33]                         None\n  35 Ops.CONST            dtypes.weakint                   []                           2048\n  36 Ops.CAST             dtypes.int                       ['2048']                     dtypes.int\n  37 Ops.ADD              dtypes.int                       [31, 36]                     None\n  38 Ops.SHRINK           dtypes.float                     [3, 37, 17]                  None\n  39 Ops.LOAD             dtypes.float                     [38]                         None\n  40 Ops.CONST            dtypes.weakint                   []                           3072\n  41 Ops.CAST             dtypes.int                       ['3072']                     dtypes.int\n  42 Ops.ADD              dtypes.int                       [31, 41]                     None\n  43 Ops.SHRINK           dtypes.float                     [3, 42, 17]                  None\n  44 Ops.LOAD             dtypes.float                     [43]                         None\n  45 Ops.SHRINK           dtypes.float                     [3, 31, 17]                  None\n  46 Ops.LOAD             dtypes.float                     [45]                         None\n  47 Ops.SHRINK           dtypes.float                     [6, 27, 17]                  None\n  48 Ops.LOAD             dtypes.float                     [47]                         None\n  49 Ops.CONST            dtypes.weakint                   []                           0\n  50 Ops.CAST             dtypes.int                       ['0']                        dtypes.int\n  51 Ops.INDEX            dtypes.float                     [34, 50]                     None\n  52 Ops.CONST            dtypes.weakint                   []                           1\n  53 Ops.CAST             dtypes.int                       ['1']                        dtypes.int\n  54 Ops.INDEX            dtypes.float                     [34, 53]                     None\n  55 Ops.INDEX            dtypes.float                     [34, 20]                     None\n  56 Ops.CONST            dtypes.weakint                   []                           3\n  57 Ops.CAST             dtypes.int                       ['3']                        dtypes.int\n  58 Ops.INDEX            dtypes.float                     [34, 57]                     None\n  59 Ops.INDEX            dtypes.float                     [48, 50]                     None\n  60 Ops.INDEX            dtypes.float                     [48, 53]                     None\n  61 Ops.INDEX            dtypes.float                     [48, 20]                     None\n  62 Ops.INDEX            dtypes.float                     [48, 57]                     None\n  63 Ops.ADD              dtypes.float                     [51, 59]                     None\n  64 Ops.ADD              dtypes.float                     [54, 60]                     None\n  65 Ops.ADD              dtypes.float                     [55, 61]                     None\n  66 Ops.ADD              dtypes.float                     [58, 62]                     None\n  67 Ops.STACK            dtypes.float                     [63, 64, 65, 66]             None\n  68 Ops.INDEX            dtypes.float                     [39, 50]                     None\n  69 Ops.INDEX            dtypes.float                     [39, 53]                     None\n  70 Ops.INDEX            dtypes.float                     [39, 20]                     None\n  71 Ops.INDEX            dtypes.float                     [39, 57]                     None\n  72 Ops.ADD              dtypes.float                     [68, 59]                     None\n  73 Ops.ADD              dtypes.float                     [69, 60]                     None\n  74 Ops.ADD              dtypes.float                     [70, 61]                     None\n  75 Ops.ADD              dtypes.float                     [71, 62]                     None\n  76 Ops.STACK            dtypes.float                     [72, 73, 74, 75]             None\n  77 Ops.INDEX            dtypes.float                     [44, 50]                     None\n  78 Ops.INDEX            dtypes.float                     [44, 53]                     None\n  79 Ops.INDEX            dtypes.float                     [44, 20]                     None\n  80 Ops.INDEX            dtypes.float                     [44, 57]                     None\n  81 Ops.ADD              dtypes.float                     [77, 59]                     None\n  82 Ops.ADD              dtypes.float                     [78, 60]                     None\n  83 Ops.ADD              dtypes.float                     [79, 61]                     None\n  84 Ops.ADD              dtypes.float                     [80, 62]                     None\n  85 Ops.STACK            dtypes.float                     [81, 82, 83, 84]             None\n  86 Ops.INDEX            dtypes.float                     [46, 50]                     None\n  87 Ops.INDEX            dtypes.float                     [46, 53]                     None\n  88 Ops.INDEX            dtypes.float                     [46, 20]                     None\n  89 Ops.INDEX            dtypes.float                     [46, 57]                     None\n  90 Ops.ADD              dtypes.float                     [86, 59]                     None\n  91 Ops.ADD              dtypes.float                     [87, 60]                     None\n  92 Ops.ADD              dtypes.float                     [88, 61]                     None\n  93 Ops.ADD              dtypes.float                     [89, 62]                     None\n  94 Ops.STACK            dtypes.float                     [90, 91, 92, 93]             None\n  95 Ops.SHRINK           dtypes.float                     [2, 32, 17]                  None\n  96 Ops.SHRINK           dtypes.float                     [2, 37, 17]                  None\n  97 Ops.SHRINK           dtypes.float                     [2, 42, 17]                  None\n  98 Ops.SHRINK           dtypes.float                     [2, 31, 17]                  None\n  99 Ops.STORE            dtypes.void                      [95, 67]                     None\n 100 Ops.STORE            dtypes.void                      [96, 76]                     None\n 101 Ops.STORE            dtypes.void                      [97, 85]                     None\n 102 Ops.STORE            dtypes.void                      [98, 94]                     None\n 103 Ops.GROUP            dtypes.void                      [102, 102, 102, 102, 99, 99, 99, 99, 100, 100, 100, 100, 101, 101, 101, 101] None\n 104 Ops.SINK             dtypes.void                      [103]                        KernelInfo(name='E\\x1b[90m_\\x1b[0m\\x1b[34m8\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[34m64\\x1b[0m\\x1b[90m_\\x1b[0m\\x1b[36m32\\x1b[0m\\x1b",
+    "lines": 105,
+    "clipped": false
+   },
+   "source": "typedef unsigned int uint;\n#define INFINITY (__int_as_float(0x7f800000))\n#define NAN (__int_as_float(0x7fffffff))\ntemplate <class T, class F> __device__ __forceinline__ T tg_bitcast(F v) { union U { F f; T t; }; U u; u.f = v; return u.t; }\nextern \"C\" __global__ void __launch_bounds__(128) E_8_64_32_4_4_4(float* data0_1048576, float* data1_1048576, float* data2_1024) {\n  int gidx0 = blockIdx.x; /* 64 */\n  int gidx1 = blockIdx.y; /* 8 */\n  int lidx0 = threadIdx.x; /* 32 */\n  int lidx1 = threadIdx.y; /* 4 */\n  int alu0 = ((gidx0<<4)+(lidx1<<2));\n  int alu1 = (alu0+(gidx1<<17)+(lidx0<<12));\n  int alu2 = (alu1+1024);\n  float4 val0 = (*((float4*)((data1_1048576+alu2))));\n  int alu3 = (alu1+2048);\n  float4 val1 = (*((float4*)((data1_1048576+alu3))));\n  int alu4 = (alu1+3072);\n  float4 val2 = (*((float4*)((data1_1048576+alu4))));\n  float4 val3 = (*((float4*)((data1_1048576+alu1))));\n  float4 val4 = (*((float4*)((data2_1024+alu0))));\n  *((float4*)((data0_1048576+alu2))) = make_float4((val0.x+val4.x),(val0.y+val4.y),(val0.z+val4.z),(val0.w+val4.w));\n  *((float4*)((data0_1048576+alu3))) = make_float4((val1.x+val4.x),(val1.y+val4.y),(val1.z+val4.z),(val1.w+val4.w));\n  *((float4*)((data0_1048576+alu4))) = make_float4((val2.x+val4.x),(val2.y+val4.y),(val2.z+val4.z),(val2.w+val4.w));\n  *((float4*)((data0_1048576+alu1))) = make_float4((val3.x+val4.x),(val3.y+val4.y),(val3.z+val4.z),(val3.w+val4.w));\n}",
+   "time_us": 32.77,
+   "ptx": {
+    "text": "//\n// Generated by NVIDIA NVVM Compiler\n//\n// Compiler Build ID: CL-36424714\n// Cuda compilation tools, release 13.0, V13.0.88\n// Based on NVVM 7.0.1\n//\n\n.version 9.0\n.target sm_89\n.address_size 64\n\n\t// .globl\tE_8_64_32_4_4_4\n\n.visible .entry E_8_64_32_4_4_4(\n\t.param .u64 E_8_64_32_4_4_4_param_0,\n\t.param .u64 E_8_64_32_4_4_4_param_1,\n\t.param .u64 E_8_64_32_4_4_4_param_2\n)\n.maxntid 128, 1, 1\n{\n\t.reg .f32 \t%f<57>;\n\t.reg .b32 \t%r<12>;\n\t.reg .b64 \t%rd<12>;\n\n\n\tld.param.u64 \t%rd1, [E_8_64_32_4_4_4_param_0];\n\tld.param.u64 \t%rd2, [E_8_64_32_4_4_4_param_1];\n\tld.param.u64 \t%rd3, [E_8_64_32_4_4_4_param_2];\n\tcvta.to.global.u64 \t%rd4, %rd1;\n\tcvta.to.global.u64 \t%rd5, %rd3;\n\tcvta.to.global.u64 \t%rd6, %rd2;\n\tmov.u32 \t%r1, %ctaid.x;\n\tmov.u32 \t%r2, %ctaid.y;\n\tmov.u32 \t%r3, %tid.x;\n\tmov.u32 \t%r4, %tid.y;\n\tshl.b32 \t%r5, %r1, 4;\n\tshl.b32 \t%r6, %r4, 2;\n\tadd.s32 \t%r7, %r5, %r6;\n\tshl.b32 \t%r8, %r2, 17;\n\tshl.b32 \t%r9, %r3, 12;\n\tadd.s32 \t%r10, %r9, %r8;\n\tadd.s32 \t%r11, %r10, %r7;\n\tmul.wide.s32 \t%rd7, %r11, 4;\n\tadd.s64 \t%rd8, %rd6, %rd7;\n\tld.global.v4.f32 \t{%f1, %f2, %f3, %f4}, [%rd8+4096];\n\tld.global.v4.f32 \t{%f9, %f10, %f11, %f12}, [%rd8+8192];\n\tld.global.v4.f32 \t{%f17, %f18, %f19, %f20}, [%rd8+12288];\n\tld.global.v4.f32 \t{%f25, %f26, %f27, %f28}, [%rd8];\n\tmul.wide.s32 \t%rd9, %r7, 4;\n\tadd.s64 \t%rd10, %rd5, %rd9;\n\tld.global.v4.f32 \t{%f33, %f34, %f35, %f36}, [%rd10];\n\tadd.s64 \t%rd11, %rd4, %rd7;\n\tadd.f32 \t%f41, %f4, %f36;\n\tadd.f32 \t%f42, %f3, %f35;\n\tadd.f32 \t%f43, %f2, %f34;\n\tadd.f32 \t%f44, %f1, %f33;\n\tst.global.v4.f32 \t[%rd11+4096], {%f44, %f43, %f42, %f41};\n\tadd.f32 \t%f45, %f12, %f36;\n\tadd.f32 \t%f46, %f11, %f35;\n\tadd.f32 \t%f47, %f10, %f34;\n\tadd.f32 \t%f48, %f9, %f33;\n\tst.global.v4.f32 \t[%rd11+8192], {%f48, %f47, %f46, %f45};\n\tadd.f32 \t%f49, %f20, %f36;\n\tadd.f32 \t%f50, %f19, %f35;\n\tadd.f32 \t%f51, %f18, %f34;\n\tadd.f32 \t%f52, %f17, %f33;\n\tst.global.v4.f32 \t[%rd11+12288], {%f52, %f51, %f50, %f49};\n\tadd.f32 \t%f53, %f28, %f36;\n\tadd.f32 \t%f54, %f27, %f35;\n\tadd.f32 \t%f55, %f26, %f34;\n\tadd.f32 \t%f56, %f25, %f33;\n\tst.global.v4.f32 \t[%rd11], {%f56, %f55, %f54, %f53};\n\tret;\n\n}\n",
+    "lines": 77,
+    "clipped": false
+   },
+   "ptxas_info": "ptxas info    : 0 bytes gmem\nptxas info    : Compiling entry function 'E_8_64_32_4_4_4' for 'sm_89'\nptxas info    : Function properties for E_8_64_32_4_4_4\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas info    : Used 28 registers, used 0 barriers, 376 bytes cmem[0]\nptxas info    : Compile time = 2.988 ms",
+   "sass": {
+    "text": "\n\tcode for sm_89\n\t.target\tsm_89\n\n\t\tFunction : E_8_64_32_4_4_4\n\t.headerflags\t@\"EF_CUDA_SM89 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM89)\"\n        /*0000*/                   MOV R1, c[0x0][0x28] ;                              /* 0x00000a0000017a02 */\n                                                                                       /* 0x000fe40000000f00 */\n        /*0010*/                   S2R R0, SR_CTAID.X ;                                /* 0x0000000000007919 */\n                                                                                       /* 0x000e220000002500 */\n        /*0020*/                   ULDC.64 UR4, c[0x0][0x118] ;                        /* 0x0000460000047ab9 */\n                                                                                       /* 0x000fc60000000a00 */\n        /*0030*/                   S2R R5, SR_TID.Y ;                                  /* 0x0000000000057919 */\n                                                                                       /* 0x000e280000002200 */\n        /*0040*/                   S2R R2, SR_CTAID.Y ;                                /* 0x0000000000027919 */\n                                                                                       /* 0x000e680000002600 */\n        /*0050*/                   S2R R3, SR_TID.X ;                                  /* 0x0000000000037919 */\n                                                                                       /* 0x000e620000002100 */\n        /*0060*/                   LEA R5, R0, R5, 0x2 ;                               /* 0x0000000500057211 */\n                                                                                       /* 0x001fe400078e10ff */\n        /*0070*/                   MOV R0, 0x4 ;                                       /* 0x0000000400007802 */\n                                                                                       /* 0x000fc40000000f00 */\n        /*0080*/                   SHF.L.U32 R5, R5, 0x2, RZ ;                         /* 0x0000000205057819 */\n                                                                                       /* 0x000fe400000006ff */\n        /*0090*/                   LEA R2, R2, R3, 0x5 ;                               /* 0x0000000302027211 */\n                                                                                       /* 0x002fc800078e28ff */\n        /*00a0*/                   LEA R3, R2, R5, 0xc ;                               /* 0x0000000502037211 */\n                                                                                       /* 0x000fe200078e60ff */\n        /*00b0*/                   IMAD.WIDE R4, R5, R0, c[0x0][0x170] ;               /* 0x00005c0005047625 */\n                                                                                       /* 0x000fc800078e0200 */\n        /*00c0*/                   IMAD.WIDE R24, R3.reuse, R0.reuse, c[0x0][0x168] ;  /* 0x00005a0003187625 */\n                                                                                       /* 0x0c0fe400078e0200 */\n        /*00d0*/                   LDG.E.128 R4, [R4.64] ;                             /* 0x0000000404047981 */\n                                                                                       /* 0x000ea8000c1e1d00 */\n        /*00e0*/                   LDG.E.128 R16, [R24.64+0x1000] ;                    /* 0x0010000418107981 */\n                                                                                       /* 0x000ea8000c1e1d00 */\n        /*00f0*/                   LDG.E.128 R20, [R24.64+0x2000] ;                    /* 0x0020000418147981 */\n                                                                                       /* 0x000ee8000c1e1d00 */\n        /*0100*/                   LDG.E.128 R8, [R24.64+0x3000] ;                     /* 0x0030000418087981 */\n                                                                                       /* 0x000f28000c1e1d00 */\n        /*0110*/                   LDG.E.128 R12, [R24.64] ;                           /* 0x00000004180c7981 */\n                                                                                       /* 0x000f62000c1e1d00 */\n        /*0120*/                   IMAD.WIDE R2, R3, R0, c[0x0][0x160] ;               /* 0x0000580003027625 */\n                                                                                       /* 0x000fe200078e0200 */\n        /*0130*/                   FADD R19, R19, R7 ;                                 /* 0x0000000713137221 */\n                                                                                       /* 0x004fe20000000000 */\n        /*0140*/                   FADD R18, R18, R6 ;                                 /* 0x0000000612127221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0150*/                   FADD R17, R17, R5 ;                                 /* 0x0000000511117221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0160*/                   FADD R16, R16, R4 ;                                 /* 0x0000000410107221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0170*/                   FADD R23, R23, R7 ;                                 /* 0x0000000717177221 */\n                                                                                       /* 0x008fe20000000000 */\n        /*0180*/                   FADD R22, R22, R6 ;                                 /* 0x0000000616167221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0190*/                   FADD R21, R21, R5 ;                                 /* 0x0000000515157221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*01a0*/                   FADD R20, R20, R4 ;                                 /* 0x0000000414147221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*01b0*/                   FADD R11, R11, R7 ;                                 /* 0x000000070b0b7221 */\n                                                                                       /* 0x010fe20000000000 */\n        /*01c0*/                   FADD R10, R10, R6 ;                                 /* 0x000000060a0a7221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*01d0*/                   FADD R9, R9, R5 ;                                   /* 0x0000000509097221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*01e0*/                   FADD R8, R8, R4 ;                                   /* 0x0000000408087221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*01f0*/                   FADD R15, R15, R7 ;                                 /* 0x000000070f0f7221 */\n                                                                                       /* 0x020fe20000000000 */\n        /*0200*/                   FADD R14, R14, R6 ;                                 /* 0x000000060e0e7221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0210*/                   FADD R13, R13, R5 ;                                 /* 0x000000050d0d7221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0220*/                   FADD R12, R12, R4 ;                                 /* 0x000000040c0c7221 */\n                                                                                       /* 0x000fe20000000000 */\n        /*0230*/                   STG.E.128 [R2.64+0x1000], R16 ;                     /* 0x0010001002007986 */\n                                                                                       /* 0x000fe8000c101d04 */\n        /*0240*/                   STG.E.128 [R2.64+0x2000], R20 ;                     /* 0x0020001402007986 */\n                                                                                       /* 0x000fe8000c101d04 */\n        /*0250*/                   STG.E.128 [R2.64+0x3000], R8 ;                      /* 0x0030000802007986 */\n                                                                                       /* 0x000fe8000c101d04 */\n        /*0260*/                   STG.E.128 [R2.64], R12 ;                            /* 0x0000000c02007986 */\n                                                                                       /* 0x000fe2000c101d04 */\n        /*0270*/                   EXIT ;                                              /* 0x000000000000794d */\n                                                                                       /* 0x000fea0003800000 */\n        /*0280*/                   BRA 0x280;                                          /* 0xfffffff000007947 */\n                                                                                       /* 0x000fc0000383ffff */\n        /*0290*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*02a0*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*02b0*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*02c0*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*02d0*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*02e0*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*02f0*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0300*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0310*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0320*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0330*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0340*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0350*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0360*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n        /*0370*/                   NOP;                                                /* 0x0000000000007918 */\n                                                                                       /* 0x000fc00000000000 */\n\t\t..........\n\n",
+    "lines": 121,
+    "clipped": false
+   }
+  }
+ ],
+ "check": {
+  "max_abs_err": 0.0,
+  "max_abs_ref": 6.903470039367676,
+  "tol": 6.903470039367675e-06,
+  "ok": true,
+  "shape": [
+   1024,
+   1024
+  ],
+  "dtype": "float32"
+ },
+ "compile_and_run_s": 0.259,
+ "kernel_times_us": [
+  [
+   "E_8_64_32_4_4_4",
+   32.77
+  ]
+ ]
+}

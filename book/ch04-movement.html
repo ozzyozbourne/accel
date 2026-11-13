@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>4. Movement ops become index math · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+  .im-idea { color: #cfe3ff; font-size: 14px; margin: 0 0 8px; }
+  .im-svg svg text { font: 10.5px var(--mono); fill: #8b97a6; text-anchor: middle; pointer-events: none; }
+  .im-svg .im-lbl { text-anchor: start; font: 600 12px var(--sans); fill: #d7dde5; }
+  .im-o rect, .im-i rect { fill: #1c2430; stroke: #2a3441; transition: fill .15s, stroke .15s; }
+  .im-o { cursor: pointer; }
+  .im-o.pad rect { fill: #10161e; stroke-dasharray: 3 2; }
+  .im-o.cur rect { fill: var(--accent); stroke: #fff; } .im-o.cur text { fill: #07121d; }
+  .im-i.seen rect { fill: rgba(52, 211, 153, .22); }
+  .im-i.cur rect { fill: var(--s-codegen); stroke: #fff; } .im-i.cur text { fill: #07121d; }
+  .im-link { stroke: #fff; stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0; }
+  .im-trail { fill: none; stroke: var(--s-codegen); stroke-width: 1.5; opacity: .7; }
+  .im-grid2 { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; margin-top: 10px; }
+  .im-grid2 pre.code { border: 1px solid var(--line); border-radius: 6px; max-height: 200px; white-space: pre-wrap; }
+  .im-h { font-size: 12px; color: var(--muted); margin: 6px 0 4px; }
+  .co-lane { stroke: #0d1117; } .co-ln { font: 10px var(--mono); fill: #081018; text-anchor: middle; }
+  .co-addr { font: 10px var(--mono); fill: #8b97a6; }
+  .co-sec { fill: #10161e; stroke: #2a3441; transition: fill .3s; } .co-sec.hit.on { fill: #2b3a52; stroke: #7cc4ff; }
+  .co-path { fill: none; stroke-width: 1.2; opacity: 0; transition: opacity .25s; } .co-path.on { opacity: .55; }
+  .co-byte { opacity: 0; transition: opacity .25s; } .co-byte.on { opacity: 1; }
+  .co-stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .co-note { font-size: 14px; margin: 6px 0; }
+  .co-src { border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; }
+  .mops { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 16px 0; max-width: 980px; }
+  .mops div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .mops b { display: block; font: 600 13px var(--mono); color: var(--s-tensor); }
+  .mops code { font-size: 12px; }
+  @media (max-width: 1000px) { .im-grid2, .mops { grid-template-columns: 1fr; } }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 4</div><h1>Movement ops become index math</h1>
+  <p class="lede">Transposes, broadcasts, slices and pads never move data in tinygrad. They are nodes in the lazy graph until
+  <em>rangeify</em> turns each one into a small change to an integer index expression. This chapter follows four examples
+  from the graph to the index math, to the CUDA C, to the addresses a warp sends to memory. It ends with why the transpose
+  kernel's loads are scalar and its stores are <code>float4</code>, what a padding mask looks like as predicated SASS, and how
+  PyTorch eager and Triton do the same jobs.</p>
+  <div class="pipeline" data-active="tensor,schedule"></div>
+
+  <h2>No views, only UOps</h2>
+  <p>Older tinygrad tracked strided views with a <code>ShapeTracker</code>. Version 0.14 has none: searching the tree for
+  <code>ShapeTracker</code> or <code>class View</code> finds nothing. A movement op is an ordinary UOp in the tensor graph, and the
+  op enum says so directly: “the core 6 movement ops! these only exist in the tensor graph”
+  <a class="src" data-src="tinygrad/uop/__init__.py#L95"></a>. The group is
+  <code>{RESHAPE, EXPAND, PERMUTE, PAD, SHRINK, FLIP}</code> <a class="src" data-src="tinygrad/uop/__init__.py#L120"></a>.
+  <code>UOp._mop</code> builds each one with its shape arguments as extra sources (a <code>STACK</code> of constants), while
+  <code>PERMUTE</code> and <code>FLIP</code> keep a plain Python tuple in <code>arg</code>
+  <a class="src" data-src="tinygrad/uop/ops.py#L787"></a>.</p>
+  <div class="mops">
+    <div><b>RESHAPE</b>new shape, same element order</div>
+    <div><b>PERMUTE</b>reorder axes <code>(1,0)</code></div>
+    <div><b>EXPAND</b>add new leading axes</div>
+    <div><b>PAD</b>add zeros: begins, ends</div>
+    <div><b>SHRINK</b>a window: begins, sizes</div>
+    <div><b>FLIP</b>reverse axes</div>
+  </div>
+  <p>Here is the lazy graph for the hardest example in the chapter, <code>a[::2, 1::3].pad(((1,1),(2,2))).contiguous()</code> on a
+  1000×1000 input. The buffer itself is flat, so the graph starts with a RESHAPE to <code>(1000, 1000)</code>. Python's strided slice is not a primitive. <code>_apply_view_ops</code> builds it from a SHRINK to the window
+  <code>[0:1000, 1:1000]</code>, a RESHAPE to <code>(500, 2, 333, 3)</code> that gives each step its own axis, and a SHRINK to
+  <code>(500, 1, 333, 1)</code> that keeps index 0 of every step. A RESHAPE to <code>(500, 333)</code> follows, then the PAD
+  <a class="src" data-src="tinygrad/mixin/movement.py#L116"></a>. Read the nested line from the inside out:</p>
+  <div class="tg-graph" data-key="pad_slice/default" data-highlight="c27 ="></div>
+  <p>That is six movement ops and one buffer, and none of them has touched memory yet. When <code>.contiguous()</code> forces the
+  result to exist, the scheduler has to produce one kernel that writes 502 × 337 = 169,174 floats, and each float needs to know
+  where it comes from.</p>
+
+  <h2>Rangeify: ranges flow backward through the graph</h2>
+  <p>Rangeify (<code>run_rangeify</code> in <code>schedule/indexing.py</code>) starts at the stores. Every value that is
+  materialized gets fresh loop variables, <code>RANGE</code> UOps, one per axis of its shape. Those ranges then travel
+  <em>backward</em> from consumer to producer. A movement op does not change the data. It changes the tuple of index expressions
+  on its way to its source. The whole definition fits in a dozen lines
+  <a class="src" data-src="tinygrad/schedule/indexing.py#L169"></a>:</p>
+<pre class="code static" data-lang="python">
+# this is the definition of the movement ops
+def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
+  match op:
+    case Ops.SHRINK:  rngs = tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
+    case Ops.PERMUTE: rngs = tuple(rngs[p] for p in argsort(arg))
+    case Ops.FLIP:    rngs = tuple(((s-1)-a) if f else a for a,s,f in zip(rngs, in_shape, arg))
+    case Ops.EXPAND:  rngs = rngs[len(arg):]
+    case Ops.PAD:
+      rngs = tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) &amp; (r &lt; (sh+off)),
+        symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
+    case Ops.RESHAPE:
+      ...  # _apply_reshape: flatten the output ranges with strides, then % and // by the input shape, then simplify
+</pre>
+  <p>Read each case as “if my output is indexed by <code>rngs</code>, my input is indexed by …”:</p>
+  <ul>
+    <li><b>SHRINK</b> adds the window's start offset to the index.</li>
+    <li><b>PERMUTE</b> reorders the index tuple (with the inverse permutation, because the ranges go backward).</li>
+    <li><b>FLIP</b> mirrors an index: <code>s-1-i</code>.</li>
+    <li><b>EXPAND</b> drops the leading ranges.</li>
+    <li><b>PAD</b> subtracts the begin offset and attaches a validity condition. <code>x.valid(cond)</code> builds
+      <code>WHERE(cond, x, Invalid)</code>, an index that can be “nowhere”.</li>
+    <li><b>RESHAPE</b> is the only case that does real arithmetic. <code>_apply_reshape</code> linearizes the output indices into one
+      flat offset, then splits it with <code>%</code> and <code>//</code> by the input shape
+      <a class="src" data-src="tinygrad/schedule/indexing.py#L153"></a>. The comment there explains why this suffices: “this simplify
+      is doing a lot of heavy lifting. this is the replacement for the reshape view merging code”
+      <a class="src" data-src="tinygrad/schedule/indexing.py#L164"></a>. The symbolic engine from Chapter 2 cancels the
+      <code>(a*1000+b)//1000</code> patterns that chains of reshapes produce.</li>
+  </ul>
+  <p>The named pass <code>apply rangeify</code> <a class="src" data-src="tinygrad/schedule/indexing.py#L320"></a> applies the
+  result. Its matcher <code>pm_apply_rangeify</code> <a class="src" data-src="tinygrad/schedule/indexing.py#L134"></a> puts
+  <code>.index(...)</code> on every buffer, turns PAD into <code>valid.where(x, 0)</code>, and finally deletes the movement ops.
+  After this pass the graph contains no movement op. It has loads and stores at integer addresses built from RANGEs.</p>
+  <p>The widget below runs these rules on miniature versions of the chapter's examples. Hover any output cell to see which input
+  cell it reads, or press <b>sweep</b> to walk the output in memory order, which is the order a store writes it. The green trail
+  shows where the reads land in the input. A transpose makes the trail jump a whole row per step. The padded border reads
+  nothing. Under the grids are the real captured expressions for the full-size kernels.</p>
+  <div id="idxmap"></div>
+
+  <h2>Transpose: one kernel, two access patterns</h2>
+  <p><code>a.T.contiguous()</code> is a PERMUTE on a RESHAPE of a 1M-element buffer. In the pass stepper below, the step after
+  <code>apply rangeify</code> shows the whole effect of the transpose in two index expressions. The store goes to
+  <code>c3*1024+c5</code> (row-major order of the output) and the load comes from <code>c5*1024+c3</code>, with the same two ranges
+  in swapped roles. Step forward to watch the codegen passes turn these ranges into thread indices.</p>
+  <div class="pass-stepper" data-key="transpose/default" data-kernel="0" data-stages="schedule,codegen" data-start="apply rangeify"></div>
+  <p>Next, the optimizer picks opts (Chapter 6 covers them in depth). For this kernel the hand-coded heuristic applied
+  <code>UPCAST(1,4)</code>, <code>LOCAL(0,8)</code>, <code>LOCAL(1,16)</code>. The upcast comes from a fallback rule: when no axis
+  has a broadcast (stride-0) buffer to exploit, upcast the <em>last</em> axis by 4
+  <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L155"></a>. The last axis is the output's column, which is contiguous
+  in the <em>output</em> and strided by 1024 in the <em>input</em>. So the output side gets the vector and the input side does
+  not:</p>
+  <div class="kernel-view" data-key="transpose/default" data-tabs="source,sass,ptxas,uops" data-tab="source" data-highlight="val0|float4"></div>
+  <p>Read it with the thread layout in mind. The block is 8 × 16 = 128 threads (<code>__launch_bounds__(128)</code>), and
+  <code>threadIdx.x</code> (<code>lidx0</code>, 8 values) varies fastest within a warp, so a warp is 8 <code>lidx0</code> × 4
+  <code>lidx1</code>. The heuristic picked those local sizes: from the last axis down, take the largest of 16, 8, 4, 3, 2 that
+  divides the axis and keeps the block at 128 threads or fewer (32 is also allowed, but only for axis 0)
+  <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L172"></a>. Globals are assigned in reverse
+  <a class="src" data-src="tinygrad/codegen/gpudims.py#L70"></a>, which is why the axis of size 128 became
+  <code>blockIdx.y</code>.</p>
+  <ul>
+    <li><b>Loads:</b> <code>alu0 = lidx0 + (gidx1&lt;&lt;3) + …</code>, so the 8 <code>lidx0</code> lanes read 8 consecutive
+      floats, 32 bytes. Each thread then loads 3 more scalars at <code>+1024</code>, <code>+2048</code>, <code>+3072</code>, one
+      input row apart. In SASS these are four <code>LDG.E</code> at offsets <code>+0x1000</code>, <code>+0x2000</code>,
+      <code>+0x3000</code> bytes.</li>
+    <li><b>Store:</b> the four values become one <code>make_float4</code> and one <code>STG.E.128</code>, because the four
+      upcast lanes are consecutive in the output. <code>memory_coalescing</code> (in <code>add images</code>, look for the
+      <code>SHRINK(..., 4)</code> store) folded them into one vector access <a class="src" data-src="tinygrad/codegen/late/coalesce.py#L103"></a>.
+      It allows lengths 4 and 2 when the renderer supports <code>float4</code>, provided the offset divides the length
+      <a class="src" data-src="tinygrad/codegen/late/coalesce.py#L141"></a>.</li>
+  </ul>
+  <p>The input side can't be vectorized. The four values a thread needs are 4 KB apart, and no single instruction loads four
+  floats from four rows. A transpose always pays somewhere. What matters is whether the warp as a whole wastes bandwidth, and
+  that brings us to coalescing.</p>
+
+  <h2>Coalescing: what a warp asks memory for</h2>
+  <p>A GPU never loads one float. When a warp executes a load, the 32 lanes' addresses are merged, and the memory system moves
+  whole <b>32-byte sectors</b> (four of them make a 128-byte cache line). An access is <em>coalesced</em> when the lanes' bytes fill
+  the sectors they touch. If 32 lanes each want 4 bytes from 32 different sectors, the hardware moves 1024 bytes to deliver 128,
+  which is 12.5% efficiency. Pick a pattern below and issue it. Every pattern except the two that are marked uses the address
+  formula of a captured kernel.</p>
+  <div id="coalesce" data-keys="add/default,transpose/default,broadcast_add/default,pad_slice/default,sum_rows/default,max_cols/default,sum_all/default"></div>
+  <p>Now the transpose kernel makes sense. Its loads are scalar, but each group of 8 lanes reads a full, aligned 32-byte sector
+  from one row, so every byte fetched is used. The <code>float4</code> stores write 64 consecutive bytes per output row. Both
+  sides are 100% sector-efficient. Compare <em>transpose (eager, one thread per output)</em>, where neighbouring lanes are a full
+  row apart and 7 of every 8 bytes fetched are thrown away (unless a cache keeps the sector until a neighbouring thread wants
+  it).</p>
+  <p>The measured times agree. The transpose kernel ran in <b>23.55 µs</b> on the L4, close to the <b>21.57 µs</b> of the plain
+  1024×1024 <code>add</code> kernel <code>E_8192_32_4</code> from Chapter 1, which moves 50% more bytes (12.6 MB vs 8.4 MB).
+  The tile shape (8 rows × 16·4 columns per block) is what keeps the transpose this cheap.</p>
+  <div class="callout warn"><p><b>How to read the times in this chapter.</b> tinygrad times a kernel with a pair of CUDA events
+  around each launch on the default stream <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L26"></a>, so its numbers
+  include launch overhead. Even a kernel that does almost nothing measures about 14 µs (Chapter 5's 16-thread
+  <code>r_16_16</code> took 14.34 µs). PyTorch's numbers come from <code>torch.profiler</code>, which reports kernel execution
+  time only. All inputs here are 4–12 MB, so between the five timed runs they stay in the L4's 48 MB L2 cache. Compare kernels
+  measured the same way, and treat cross-framework gaps for tiny kernels with suspicion.</p></div>
+
+  <h2>Broadcast: a range replaced by zero</h2>
+  <p><code>a + b.reshape(1, 1024)</code> adds a row vector to every row. The captured tensor graph has no EXPAND: an
+  <code>ADD</code> whose sources have shapes <code>(1024, 1024)</code> and <code>(1, 1024)</code>. Broadcasting lives in the shape
+  computation, and rangeify handles it in <code>broadcast_rngs</code>, which replaces the range of a broadcast axis with the constant
+  0 for that source <a class="src" data-src="tinygrad/schedule/indexing.py#L63"></a>. After simplification the index of
+  <code>b</code> uses only the column range:</p>
+  <div class="ir-snip" data-key="broadcast_add/default" data-pass="apply rangeify" data-highlight="c12 ="></div>
+  <p>The optimizer treats broadcast axes specially. The upcast loop prefers axes along which some buffer has stride 0, because
+  upcasting such an axis lets one loaded value serve several outputs. The kernel <code>E_8_64_32_4_4_4</code> upcasts
+  <em>both</em> axes by 4, so each thread computes a 4 × 4 tile. In the source, <code>val4</code> (four floats of <code>b</code>) is
+  loaded once and added to four rows:</p>
+  <div class="kernel-view" data-key="broadcast_add/default" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="val4"></div>
+  <p>The register reuse is good, but the local axes cost something. The heuristic “prioritize[s] making expand axes local”
+  <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L166"></a>. The expand axis here is the row axis, and it received the
+  32-wide <code>threadIdx.x</code>. Lanes of a warp are therefore four rows (16 KB) apart. Select <em>broadcast_add: float4 load of
+  a</em> in the coalescing widget: each <code>LDG.E.128</code> touches 32 sectors and uses half of each. The kernel took
+  <b>32.77 µs</b>, slower than the plain add (21.57 µs) even though it reads 4 MB less. The heuristic is a heuristic. Chapter 6
+  shows how BEAM search finds better choices by timing them.</p>
+
+  <h2>Slice and pad: an index that can be nowhere</h2>
+  <p>Back to the slice-and-pad example. After <code>apply rangeify</code>, the six movement ops have become one affine expression
+  and one condition:</p>
+  <div class="pass-stepper" data-key="pad_slice/default" data-kernel="0" data-stages="schedule,codegen" data-start="apply rangeify"></div>
+  <p>Take it apart (<code>c3</code> is the output row, 0…501; <code>c6</code> the output column, 0…336):</p>
+  <ul>
+    <li><code>c15 = (c3 ≥ 1) &amp; (c3 &lt; 501)</code> and <code>c22 = (c6 ≥ 2) &amp; (c6 &lt; 335)</code> are the PAD's
+      validity conditions, written as <code>(c3&lt;1) != True</code> because the symbolic engine normalizes comparisons to
+      <code>&lt;</code>.</li>
+    <li><code>c3*2000 + c6*3 - 2005</code> is the slice. Output row <code>c3</code> is slice row <code>c3-1</code>, which is input
+      row <code>2(c3-1)</code>. Output column <code>c6</code> is input column <code>1 + 3(c6-2)</code>. Multiply out
+      <code>2000(c3-1) + 3(c6-2) + 1</code> and you get exactly the captured constant <code>-2005</code>.</li>
+    <li><code>c35 = valid.where(index, Invalid)</code> is the gated index, and <code>c38 = valid.where(load, 0.0)</code> is the
+      padded value <a class="src" data-src="tinygrad/schedule/indexing.py#L107"></a>.</li>
+  </ul>
+  <p>The valid condition has to become a branch-free guard on the load. In codegen, the pass <code>move gates from index</code>
+  rewrites <code>INDEX(buf, gate.where(idx, Invalid)).load()</code> into <code>INDEX(buf, idx).load(0, gate)</code>, a load with an
+  alternative value and a gate source <a class="src" data-src="tinygrad/codegen/late/gater.py#L9"></a>. The renderer prints a
+  gated load as a C ternary:</p>
+  <div class="kernel-view" data-key="pad_slice/default" data-tabs="source,sass,ptx,ptxas" data-tab="source" data-highlight="val0"></div>
+  <p>Notice <code>(0&lt;(gidx1+lidx0))</code>. The output row is <code>2*gidx1 + lidx0</code>, and the simplifier replaced
+  “row ≥ 1” with an equivalent condition: for non-negative integers, <code>2g + l ≥ 1</code> exactly when <code>g + l ≥ 1</code>.
+  Switch to the SASS tab to see how the hardware evaluates the guard without a branch:</p>
+<pre class="code static" data-lang="sass">
+        /*0060*/                   MOV R7, RZ ;                              // the "else 0.0f" value, preloaded
+        /*0080*/                   IADD3 R0, R9, R4, RZ ;                    // lidx0 + gidx1
+        /*0090*/                   IADD3 R2, R5, -0x2, RZ ;                  // gidx0 - 2
+        /*00a0*/                   ISETP.GE.AND P0, PT, R0.reuse, 0x1, PT ;  // lidx0+gidx1 >= 1
+        /*00b0*/                   IMAD.IADD R0, R0, 0x1, R4 ;               // lidx0 + 2*gidx1  (the output row)
+        /*00c0*/                   ISETP.GT.U32.OR P0, PT, R2, 0x14c, !P0 ;  // (unsigned)(gidx0-2) > 332  ==  gidx0<2 || gidx0>334
+        /*00d0*/                   ISETP.GT.OR P0, PT, R0, 0x1f4, P0 ;       // 2*gidx1+lidx0 > 500
+        /*00e0*/              @!P0 IMAD R0, R4, 0x2, R9 ;                    // address math only when valid
+        /*0120*/              @!P0 LDG.E R7, [R2.64] ;                       // predicated load
+        /*0160*/                   STG.E [R4.64], R7 ;                       // unconditional store
+</pre>
+  <p>This is an excerpt of the captured SASS: a few address-computation lines and the encoding words are left out, and the
+  comments are added. ptxas computes one predicate <code>P0</code> =
+  “invalid” and guards the address math and the <code>LDG.E</code> with <code>@!P0</code>. The register <code>R7</code> already holds
+  0, so invalid lanes store zero without any branch. One more trick: the two-sided test <code>1 &lt; gidx0 &lt; 335</code> became a
+  single unsigned compare, because <code>gidx0 - 2</code> wraps to a huge unsigned number when <code>gidx0 &lt; 2</code>.</p>
+  <p>The kernel is correct, but <b>67.58 µs</b> is slow for 1.35 MB of traffic. The kernel name <code>E_251_337_2</code> shows the
+  reason: the only opt is <code>LOCAL(0,2)</code>, so each block has 2 threads. The output is 502 × 337, and 337 is prime.
+  Neither the 4-way upcast fallback nor any local size from the list divides it, so the column axis got no opt at all. The row
+  axis 502 = 2 × 251 only admits 2. The grid has 84,587 two-thread blocks, and each block occupies a whole warp slot with 2 live
+  lanes (see <em>pad_slice</em> in the coalescing widget). An Ada SM keeps at most 24 blocks resident, so the L4's 58 SMs have
+  fewer than 3,000 threads in flight instead of tens of thousands. Triton sidesteps the problem with masked tiles, as the next
+  sections show.</p>
+
+  <h2>permute4d: the axis that stays put</h2>
+  <p><code>a.permute(0,2,1,3).contiguous()</code> on a 32⁴ tensor swaps the middle two axes and leaves the last axis alone. In the
+  captured expressions the last range <code>c5</code> has stride 1 on both sides:</p>
+  <div class="ir-snip" data-key="permute4d/default" data-pass="apply rangeify" data-grep="index|c13 =|range"></div>
+  <p>Because a run of 32 consecutive floats stays consecutive, the upcast by 4 on the last axis vectorizes <em>both</em> sides.
+  The whole kernel body is one <code>float4</code> load and one <code>float4</code> store. In SASS that is one
+  <code>LDG.E.128</code> and one <code>STG.E.128</code>, and the kernel ran in <b>22.53 µs</b>, the same as a copy:</p>
+  <div class="kernel-view" data-key="permute4d/default" data-tabs="source,sass,ptxas" data-tab="source" data-highlight="float4"></div>
+  <p>That is the general lesson about permutes. The cost depends on what happens to the <em>innermost</em> axis. If it stays
+  innermost, a permute is a copy with unusual address math. If it moves, as in a 2-D transpose, someone has to turn rows into
+  columns.</p>
+
+  <h2>PyTorch: strided iterators and layout conversion</h2>
+  <div class="callout torch"><p><b>Eager.</b> PyTorch eager has no lazy graph. <code>a.t()</code> returns a <em>view</em> (same
+  storage, strides <code>(1, 1024)</code>), and <code>.contiguous()</code> launches a copy kernel. The captured kernel is
+  <code>elementwise_kernel&lt;128, 2, … direct_copy_kernel_cuda …&gt;</code>, the generic, non-vectorized TensorIterator loop:
+  128 threads per block and 2 elements per thread. TensorIterator computes each element's input offset from the strides. Output
+  is linear in the thread index, so a warp's stores are contiguous and its loads stride by a full row (the <em>eager</em> pattern
+  in the coalescing widget). It took <b>26.78 µs</b>. Eager <code>add</code> uses
+  <code>vectorized_elementwise_kernel&lt;4, …&gt;</code> and took 7.01 µs. The broadcast add also falls back to the non-vectorized
+  <code>elementwise_kernel&lt;128, 2&gt;</code> (7.04 µs) because one operand is not contiguous.</p></div>
+  <p><b>Inductor/Triton.</b> <code>torch.compile</code> generates <code>triton_poi_fused_clone_t_0</code>, a 2-D <em>tiled</em>
+  pointwise kernel (<code>tile_hint=TileHint.SQUARE</code>, 32 × 32 tiles). In its source, the load is
+  <code>tl.load(in_ptr0 + (y0 + 1024*x1))</code> and the store is <code>tl.store(out_ptr0 + (x1 + 1024*y0))</code>, which is the
+  same index swap rangeify produced.</p>
+  <div class="torch-view" data-key="transpose/torch" data-tabs="eager,output,ttgir,sass" data-tab="ttgir" data-highlight="#blocked|convert_layout|tt.load|tt.store"></div>
+  <p>The TTGIR shows what Triton does with the tile. The load uses layout <code>#blocked1</code>: <code>sizePerThread = [4, 1]</code>,
+  <code>order = [0, 1]</code>, so each thread holds 4 consecutive elements along <code>y</code>, the input's contiguous axis. The store
+  uses <code>#blocked</code>: <code>sizePerThread = [1, 4]</code>, <code>order = [1, 0]</code>, 4 consecutive elements along
+  <code>x</code>, the output's contiguous axis. Between them sits <code>ttg.convert_layout</code>, which Triton lowers to a round
+  trip through shared memory (the kernel metadata reports <code>shared: 4096</code>, one 32 × 32 float tile). The SASS has
+  two <code>LDG.E.128</code>, eight <code>STS</code>, a <code>BAR.SYNC</code>, eight <code>LDS</code>, and two <code>STG.E.128</code>. Both
+  global sides are fully vectorized and coalesced (<em>transpose (Triton)</em> in the widget). The transpose happens inside the SM,
+  where scattered access is cheap. tinygrad's hand-coded path never uses shared memory for a pure copy. It settles for
+  sector-efficient scalar loads.</p>
+  <div class="sass-mix" data-key="transpose/torch" data-top="10"></div>
+  <p>For <code>pad_slice</code>, eager launches two kernels: a <code>FillFunctor</code> that zeroes the output (1.63 µs), then a
+  <code>direct_copy</code> into the interior view (2.88 µs). Inductor fuses them into
+  <code>triton_poi_fused_constant_pad_nd_slice_0</code> (2.53 µs). Its body has the same affine index as tinygrad's,
+  <code>(-2005) + 3*x0 + 2000*x1</code>, and the same validity mask, passed as the load's <code>mask</code> with
+  <code>other=0.0</code>. The difference is the launch shape. Triton runs 1-D blocks over the flattened output, with a mask on the
+  tail, so the prime 337 doesn't matter.</p>
+  <div class="torch-view" data-key="pad_slice/torch" data-tabs="eager,output,ttgir" data-tab="output" data-highlight="tmp12|xmask|-2005"></div>
+  <div class="bars" data-keys="transpose/default,transpose/torch:eager,transpose/torch:inductor,permute4d/default,permute4d/torch:inductor,pad_slice/default,pad_slice/torch:eager,pad_slice/torch:inductor,broadcast_add/default,broadcast_add/torch:inductor"
+       data-labels="transpose · tinygrad|transpose · eager|transpose · Triton|permute4d · tinygrad|permute4d · Triton|pad_slice · tinygrad|pad_slice · eager (2 kernels)|pad_slice · Triton|broadcast_add · tinygrad|broadcast_add · Triton"
+       data-title="L4 time (tinygrad: event-timed incl. launch overhead; torch: profiler kernel time)"></div>
+  <p>Keep the timing caveat from earlier in mind when reading this chart. The big ratios (tinygrad 67.58 µs vs Triton 2.53 µs on
+  <code>pad_slice</code>, eager 26.78 µs vs Triton 5.22 µs on the transpose) are real differences in launch shape and access
+  pattern. The ratio between tinygrad's ~22 µs copies and Triton's ~5 µs copies is mostly the different timers.</p>
+
+  <h2>Summary</h2>
+  <ul>
+    <li>Movement ops are UOps in the tensor graph. Rangeify pushes RANGE tuples backward through them with
+      <code>apply_movement_op</code>, then deletes them. What is left is integer index arithmetic, simplified symbolically.</li>
+    <li>PERMUTE reorders ranges, SHRINK adds offsets, EXPAND drops leading ranges, broadcasting replaces ranges with 0, RESHAPE is <code>//</code>
+      and <code>%</code> that the simplifier cancels, and PAD wraps the index in <code>WHERE(valid, idx, Invalid)</code>.</li>
+    <li>A validity mask becomes a gated load (<code>move gates from index</code>), a C ternary, and in SASS a predicate:
+      <code>@!P0 LDG.E</code> over a register preloaded with 0.</li>
+    <li>Vector width follows contiguity. tinygrad's transpose stores <code>float4</code> and loads scalars, yet stays
+      sector-efficient. permute4d keeps its inner axis and vectorizes both sides.</li>
+    <li>Coalescing is decided by which index <code>threadIdx.x</code> lands on. The heuristic sometimes chooses badly (broadcast_add),
+      and prime sizes can starve it (pad_slice).</li>
+    <li>PyTorch eager does movement with strided TensorIterator copies. Triton tiles the transpose and swaps layouts through shared
+      memory (<code>convert_layout</code>).</li>
+  </ul>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch04.js"></script></body></html>

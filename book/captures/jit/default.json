@@ -1,0 +1,50 @@
+{
+ "example": "jit",
+ "variant": "default",
+ "chapter": 10,
+ "device": "CUDA",
+ "calls": [
+  {
+   "call": 0,
+   "jit_cnt_after": 1,
+   "kernel_count": 1,
+   "log": "*** CUDA       1 r_256_16_512_32                                arg  3 mem   0.00 GB tm    805.70us/     0.81ms (    167 GFLOPS    2|667    GB/s)\n",
+   "y0": 9831.302734375
+  },
+  {
+   "call": 1,
+   "jit_cnt_after": 2,
+   "kernel_count": 1,
+   "log": "JIT captured 1 linears with 1 inputs\n*** CUDA       1 r_256_16_512_32                                arg  3 mem   0.00 GB tm    798.11us/     0.80ms (    169 GFLOPS    2|673    GB/s)\n",
+   "y0": 19150.60546875
+  },
+  {
+   "call": 2,
+   "jit_cnt_after": 3,
+   "kernel_count": 1,
+   "log": "*** CUDA       1 r_256_16_512_32                                arg  3 mem   0.00 GB tm    794.78us/     0.79ms (    170 GFLOPS    2|676    GB/s)\n",
+   "y0": 28469.904296875
+  },
+  {
+   "call": 3,
+   "jit_cnt_after": 4,
+   "kernel_count": 1,
+   "log": "*** CUDA       1 r_256_16_512_32                                arg  3 mem   0.00 GB tm    807.87us/     0.81ms (    167 GFLOPS    2|665    GB/s)\n",
+   "y0": 37789.2109375
+  }
+ ],
+ "symbolic": [
+  {
+   "n": 10,
+   "sum": 90.0,
+   "expected": 90.0,
+   "log": "scheduled     1 kernels in    14.57 ms | CACHE MISS 189b9319 |     256 uops in cache | /content/book/harness/jit_demo.py:39\ntypedef unsigned int uint;\n#define INFINITY (__int_as_float(0x7f800000))\n#define NAN (__int_as_float(0x7fffffff))\ntemplate <class T, class F> __device__ __forceinline__ T tg_bitcast(F v) { union U { F f; T t; }; U u; u.f = v; return u.t; }\nextern \"C\" __global__ void __launch_bounds__(1) r_n(float* data0_1, float* data1_1024, const int data2_) {\n  float buf0[1];\n  *(buf0+0) = 0.0f;\n  for (int Ridx0 = 0; Ridx0 < data2_; Ridx0++) {\n    float val0 = (*(data1_1024+Ridx0));\n    *(buf0+0) = ((*(buf0+0))+val0);\n  }\n  *(data0_1+0) = ((*(buf0+0))*2.0f);\n}\n*** CUDA       3 r_n                                            arg  2 mem   0.00 GB tm     28.67us/     0.84ms (      0 GFLOPS    0|0      GB/s)\n"
+  },
+  {
+   "n": 700,
+   "sum": 489300.0,
+   "expected": 489300.0,
+   "log": "scheduled     1 kernels in     1.78 ms |  cache hit 189b9319 |     295 uops in cache | /content/book/harness/jit_demo.py:39\n*** CUDA       4 r_n                                            arg  2 mem   0.00 GB tm     31.81us/     0.87ms (      0 GFLOPS    0|0      GB/s)\n"
+  }
+ ]
+}

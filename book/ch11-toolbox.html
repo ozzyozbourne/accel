@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>11. Appendix: the debug toolbox · From Python to SASS</title>
+<link rel="stylesheet" href="assets/book.css">
+<style>
+  .anim { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 22px 0; overflow: hidden; }
+  .dbg-levels { display: flex; gap: 4px; flex-wrap: wrap; }
+  .dbg-out { max-height: 560px; }
+  .dbg-out .blk { display: block; margin: 0 0 6px; border-left: 3px solid #33445a; padding-left: 8px; animation: dbgIn .5s ease both; }
+  .dbg-out .blk.l4 { border-left-color: var(--good); } .dbg-out .blk.null { border-left-color: var(--s-render); }
+  .dbg-out .tag { display: inline-block; font: 600 10.5px var(--sans); padding: 0 6px; border-radius: 4px; margin-bottom: 2px; background: #243041; color: #cfe3ff; }
+  @keyframes dbgIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .d2 { font: 13px/1.9 var(--mono); white-space: pre-wrap; overflow-x: auto; background: #0a0e14; padding: 14px; }
+  .d2 span { cursor: help; border-bottom: 2px solid transparent; transition: background .2s; padding: 1px 0; }
+  .d2 span:hover, .d2 span.on { background: rgba(124,196,255,.18); }
+  .d2-note { padding: 10px 14px; font-size: 14px; min-height: 3.5em; border-top: 1px solid var(--line); color: #c9d2dc; }
+  .sx { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+  .sx-list { font: 12.5px/1.75 var(--mono); background: #0a0e14; padding: 8px 0; }
+  .sx-list div { padding: 0 12px; cursor: pointer; white-space: pre; border-left: 3px solid transparent; }
+  .sx-list div:hover { background: #151f2c; } .sx-list div.on { background: rgba(124,196,255,.16); border-left-color: var(--accent); }
+  .sx-list div.dep { background: rgba(251,191,36,.12); }
+  .sx-info { padding: 12px 16px; font-size: 14px; border-left: 1px solid var(--line); }
+  .sx-info h4 { margin: 0 0 6px; font: 600 15px var(--mono); color: #fff; }
+  .bits { display: grid; grid-template-columns: repeat(6, auto); gap: 4px; margin: 10px 0; font: 12px var(--mono); }
+  .bits div { background: #10161e; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; text-align: center; }
+  .bits b { display: block; color: #fff; font-size: 14px; }
+  table.env td:first-child { white-space: nowrap; font-family: var(--mono); font-size: 13px; }
+  table.env { max-width: 1000px; }
+  @media (max-width: 1000px) { .sx { grid-template-columns: 1fr; } .sx-info { border-left: 0; border-top: 1px solid var(--line); } }
+</style></head>
+<body><main>
+  <div class="kicker">Chapter 11 · Appendix</div><h1>The debug toolbox</h1>
+  <p class="lede">Every artifact in this book can be reproduced with switches that ship with tinygrad, NVIDIA's command-line tools and PyTorch. This appendix lists them stage by stage, says exactly what each one prints and where in the source that happens, shows how to render CUDA for an L4 on a laptop with no GPU, walks through the harness that captured the book, and ends with a cheat sheet for reading PTX and SASS, including an interactive decoder for the control bits hidden in every SASS instruction.</p>
+  <div class="pipeline"></div>
+  <div hidden data-key="add/default"></div><div hidden data-key="jit/default"></div>
+
+  <h2>Which tool for which stage</h2>
+  <table class="env">
+    <tr><th>Stage</th><th>tinygrad</th><th>PyTorch</th></tr>
+    <tr><td>Tensor graph</td><td><code>print(t.uop)</code>, <code>pyrender(t.uop.sink())</code>, VIZ</td><td><code>TORCH_LOGS=graph_code</code>, a custom <code>torch.compile</code> backend</td></tr>
+    <tr><td>Schedule</td><td><code>DEBUG=3</code>, <code>DEBUG_RANGEIFY=1</code>, <code>t.schedule_linear()</code>, VIZ</td><td><code>TORCH_COMPILE_DEBUG=1</code> (<code>ir_pre_fusion.txt</code>, <code>ir_post_fusion.txt</code>)</td></tr>
+    <tr><td>Kernel AST</td><td><code>DEBUG=5</code></td><td>Inductor IR loop bodies</td></tr>
+    <tr><td>Codegen passes</td><td>VIZ, <code>python -m tinygrad.viz.cli</code>, <code>TRACK_MATCH_STATS</code></td><td>Triton cache: <code>.ttir</code>, <code>.ttgir</code>, <code>.llir</code></td></tr>
+    <tr><td>Opts</td><td><code>DEBUG=3</code> (applied opts), <code>DEBUG=4</code> (heuristic notes), <code>BEAM_DEBUG</code></td><td><code>TORCH_LOGS=autotuning</code></td></tr>
+    <tr><td>Source</td><td><code>DEBUG=4</code></td><td><code>run_and_get_code</code>, <code>TORCH_LOGS=output_code</code></td></tr>
+    <tr><td>PTX</td><td><code>DEBUG=5</code> on CUDA, <code>DEV=CUDA:PTX</code></td><td><code>.ptx</code> in <code>TRITON_CACHE_DIR</code></td></tr>
+    <tr><td>SASS</td><td><code>DEBUG=7</code>, or <code>ptxas</code> + <code>cuobjdump -sass</code></td><td><code>cuobjdump -sass</code> on the cached <code>.cubin</code></td></tr>
+    <tr><td>Run time</td><td><code>DEBUG=2</code>, <code>PROFILE</code>, VIZ</td><td><code>torch.profiler</code></td></tr>
+  </table>
+
+  <h2>DEBUG, level by level</h2>
+  <p><code>DEBUG</code> is a <code>ContextVar</code> (<a class="src" data-src="tinygrad/helpers.py#L232"></a>), so you can set it in the environment for a whole run or with <code>with Context(DEBUG=4):</code> for one block. The capture harness used the second form to time kernels. Each level prints everything the lower levels print, plus more. The official table in <code>docs/env_vars.md</code> is a good summary but not exact for this commit, so here is what the source actually does at each threshold:</p>
+  <table class="env">
+    <tr><th>Level</th><th>Adds</th><th>Where</th></tr>
+    <tr><td>DEBUG=1</td><td><code>opened device …</code>; the <code>scheduled N kernels in X ms | cache hit/CACHE MISS …</code> line when a schedule has more than one kernel; memory planner savings; the <code>compiling</code> progress bar; JIT capture and prune messages</td><td><a class="src" data-src="tinygrad/device.py#L35"></a> <a class="src" data-src="tinygrad/schedule/__init__.py#L131"></a> <a class="src" data-src="tinygrad/engine/realize.py#L277"></a></td></tr>
+    <tr><td>DEBUG=2</td><td>One <code>***</code> line per executed kernel, with time. It also forces synchronous, event-timed launches (<code>wait=DEBUG&gt;=2</code>). Also BEAM progress, <code>emulating X as Y</code>, and <code>JIT GRAPHing batch…</code></td><td><a class="src" data-src="tinygrad/engine/realize.py#L92"></a> <a class="src" data-src="tinygrad/engine/realize.py#L318"></a></td></tr>
+    <tr><td>DEBUG=3</td><td>The <code>scheduled</code> line always; <code>&lt;name&gt; opts: (Opt(…), …)</code> per kernel; <code>split N: …</code> for split reductions; TC and matvec choices</td><td><a class="src" data-src="tinygrad/codegen/__init__.py#L422"></a> <a class="src" data-src="tinygrad/schedule/rangeify.py#L91"></a></td></tr>
+    <tr><td>DEBUG=4</td><td>The rendered source (CUDA C, or PTX on <code>CUDA:PTX</code>); heuristic notes such as <code>more upcast axis : […]</code></td><td><a class="src" data-src="tinygrad/codegen/__init__.py#L450"></a> <a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L134"></a></td></tr>
+    <tr><td>DEBUG=5</td><td>The kernel AST as runnable Python (<code>pyrender</code>) before codegen. On CUDA, also the PTX the driver loads, pretty-printed with line numbers</td><td><a class="src" data-src="tinygrad/codegen/__init__.py#L291"></a> <a class="src" data-src="tinygrad/runtime/ops_cuda.py#L40"></a></td></tr>
+    <tr><td>DEBUG=6</td><td><b>Nothing new in codegen at this commit.</b> The docs say "linearized uops", but no <code>DEBUG &gt;= 6</code> check exists outside the USB driver; our DEBUG=6 run printed exactly what DEBUG=5 did. Use <code>print_uops</code> instead (below)</td><td><code>docs/env_vars.md:72</code></td></tr>
+    <tr><td>DEBUG=7</td><td>The machine code: <code>compiler.disassemble(lib)</code>. For CUDA that is <code>ptxas</code> then <code>nvdisasm</code>, so both must be on <code>PATH</code>. Also buffer alloc/free logs</td><td><a class="src" data-src="tinygrad/codegen/__init__.py#L452"></a> <a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L38"></a></td></tr>
+  </table>
+  <p>Drag the level below to see the output accumulate for <code>a + b</code>. Blocks tagged <b>L4</b> are real output from the captures. Blocks tagged <b>NULL</b> came from running the same program in this book's build environment against the NULL device with the NVCC renderer (see below). Those print the same compiler output but no real timing, so we omit their <code>***</code> lines.</p>
+  <div class="anim" id="dbglevels"></div>
+
+  <h3>Reading a DEBUG=2 line</h3>
+  <p>The DEBUG=2 line is the one you will look at most. Here is a real one from the L4: the first call of the <code>TinyJit</code> demo in chapter 10 (capture <code>jit/default</code>). Hover over or tap each field:</p>
+  <div class="anim" id="d2line"></div>
+  <p>The line is printed by <a class="src" data-src="tinygrad/engine/realize.py#L92"></a>. The two bandwidth numbers come from the kernel's <code>Estimates</code>: <code>mem</code> counts each buffer once, the unique bytes the kernel must move, and <code>lds</code> counts every load and store the code issues. A large gap between them, like 2 vs 667 GB/s here, means the kernel rereads the same data many times. For a matmul-like kernel that is expected, and caches and registers absorb most of the rereads. The header turns green the first time a kernel runs and magenta when the JIT runs it (<a class="src" data-src="tinygrad/engine/realize.py#L86"></a>). Set <code>NO_COLOR=1</code> to drop the ANSI codes when you pipe the output.</p>
+
+  <h2>Watching the passes: VIZ, viz.cli, TRACK_MATCH_STATS</h2>
+  <p><b><code>VIZ=1</code></b> (<a class="src" data-src="tinygrad/helpers.py#L266"></a>) turns on <code>TRACK_MATCH_STATS=2</code> (<a class="src" data-src="tinygrad/uop/ops.py#L1483"></a>). Every <code>graph_rewrite</code> then records its input, every pattern that matched, and the output. VIZ also turns on <code>PROFILE</code> and sets <code>PARALLEL=0</code>, so compiling happens in-process where the recorder can see it (<a class="src" data-src="tinygrad/helpers.py#L269"></a>). At exit tinygrad writes <code>/tmp/rewrites.pkl.&lt;user&gt;</code>, and if stdout is a terminal it <code>exec</code>s the web viewer (<a class="src" data-src="tinygrad/uop/ops.py#L1596"></a>). The viewer shows each pass as a graph you can click through, with the rule that fired highlighted.</p>
+  <p><b><code>VIZ=-1</code></b> records but does not open the viewer. At exit, once both the rewrite trace and the profile are saved, <code>launch_viz</code> prints <code>saved viz files, view using: python -m tinygrad.viz.cli</code> (<a class="src" data-src="tinygrad/uop/ops.py#L1624"></a>; <code>VIZ=1</code> prints the same line when stdout is not a terminal). The CLI (<a class="src" data-src="tinygrad/viz/cli.py#L220"></a>) is very handy over SSH. For the NULL-device <code>a + b</code>:</p>
+  <pre class="code static" data-lang="text">
+$ DEV=NULL:NVCC:sm_89 VIZ=-1 python add.py
+rewrote 3 graphs and matched 136 times, saved to /tmp/rewrites.pkl.user
+saved viz files, view using: python -m tinygrad.viz.cli
+$ python -m tinygrad.viz.cli --list
+ALL
+USER
+TINY
+NULL
+NULL Memory
+$ python -m tinygrad.viz.cli -s TINY | head -4            # host-side passes with timings
+*** TINY    Callify 1 Buffer n1                            tm   2398.66us/     0.51ms (loc tensor.py:767 _wrapper)
+*** TINY    View Tensor Graph                              tm     13.50us/     0.53ms
+*** TINY    number the uops                                tm    256.84us/     0.57ms
+*** TINY    early transform tensor graph                   tm   1214.71us/     0.84ms
+$ DEBUG=5 python -m tinygrad.viz.cli -s NULL               # per kernel: AST, then every pass with its match count
+*** NULL    E_8192_32_4                                    tm      1.62us/    77.40ms (...)
+c1 = UOp(Ops.PARAM, dtypes.float, (UOp.const(1048576, dtypes.weakint),), ParamArg(0, dtypes.float, device='NULL'))
+...
+simplify ranges - 1
+ check_merge_0_1 - 6
+shift (0,) 4 upcast - 1
+shift (0,) 32 local - 1
+flatten range - 1
+postopt symbolic - 3
+expander - 2
+...
+memory coalescing - 12
+...
+linearize/render - 4
+</pre>
+  <p>The CLI's own verbosity follows <code>DEBUG</code> (<a class="src" data-src="tinygrad/viz/cli.py#L211"></a>): 3 adds the base AST, 4 the source, 5 the step list, 6 every step's graph, and 7 the reconstructed matches. Notice <code>shift (0,) 4 upcast</code> and <code>shift (0,) 32 local</code>: these are the opt applications from <code>shift_to</code>, which our harness could not see as named passes because they go through <code>substitute</code>, not <code>graph_rewrite</code>. The same goes for <code>memory coalescing</code>. VIZ is the more complete view of the two.</p>
+  <p><b><code>TRACK_MATCH_STATS=1</code></b> without VIZ prints, at exit, a table of every pattern rule: matches / attempts, time, and source location, sorted by time (<a class="src" data-src="tinygrad/uop/ops.py#L1607"></a>). It is the profiler for the rewrite engine. The tail for <code>a + b</code>:</p>
+  <pre class="code static" data-lang="text">
+     1 /       2 --     22.60 /     22.61 ms -- __init__.py:144      (UPat(Ops.SINK, name="function"), lower_sink_to_linear),
+  1773 /    4716 --     64.26 /    121.24 ms -- TOTAL
+256 rules, 89 matched once
+</pre>
+  <p><code>TRACK_MATCH_STATS=3</code> also prints every single match with its time and location.</p>
+  <h3>Smaller lenses</h3>
+  <ul>
+    <li><b><code>DEBUG_RANGEIFY=1</code></b> (<a class="src" data-src="tinygrad/helpers.py#L275"></a>) prints the rangeify table shown in chapter 1: consumers, op, shape, ending ranges, and input → output ranges, with <code>***</code> on nodes that get realized. Use it with <code>NO_COLOR=1</code>.</li>
+    <li><b><code>DEBUG_LINEARIZE=1</code></b> (<a class="src" data-src="tinygrad/codegen/late/linearizer.py#L48"></a>) prints the linearizer's priority key for each uop, <code>(run_count, priority, extra)</code>. That explains why PARAMs come first (−20), loads early and stores late.</li>
+    <li><b><code>print_uops</code></b> (<a class="src" data-src="tinygrad/uop/render.py#L18"></a>) prints a linear program. <code>pyrender</code> turns any graph into Python that rebuilds it. That is the format of every IR dump in this book.</li>
+    <li><b><code>Tensor.schedule_linear()</code></b> (<a class="src" data-src="tinygrad/tensor.py#L413"></a>) returns the list of kernel CALLs without running them. <code>call.src[0]</code> is each kernel's AST.</li>
+    <li><b><code>BEAM_DEBUG=1</code></b> prints the AST under search and each failed candidate (<a class="src" data-src="tinygrad/codegen/opt/search.py#L110"></a>).</li>
+  </ul>
+
+  <h2>Switches that change the compiler</h2>
+  <p>These are not debugging aids. They change what gets generated, and each one is part of the codegen cache key (<code>to_program_config</code>), so flipping one recompiles. The book's variants use five of them:</p>
+  <table class="env">
+    <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+    <tr><td>NOOPT=1</td><td>0</td><td>Skip <code>hand_coded_optimizations</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L346"></a>). You get one thread per output and plain loops: <code>matmul/noopt</code> is <code>r_1024_1024_1024</code>, a 1024×1024 grid of single-thread blocks.</td></tr>
+    <tr><td>BEAM=n</td><td>0</td><td>Beam search of width n over opts, timing real candidates on the device (<a class="src" data-src="tinygrad/codegen/opt/search.py#L111"></a>). Results are cached on disk; <code>IGNORE_BEAM_CACHE=1</code> searches again. <code>JITBEAM</code> applies only inside TinyJit.</td></tr>
+    <tr><td>TC</td><td>1</td><td>Tensor cores in the heuristic (<a class="src" data-src="tinygrad/codegen/opt/heuristic.py#L28"></a>): 0 off, 1 on, 2 shape only (no WMMA). <code>TC_SELECT</code> picks one tensor core by index; <code>TC_OPT</code> 0–2 widens eligibility. <code>ALLOW_TF32=1</code> lets fp32 matmuls use the tf32 cores.</td></tr>
+    <tr><td>TRANSCENDENTAL</td><td>1</td><td>At 1, <code>exp2</code>/<code>log2</code>/<code>sin</code> are decomposed only if the renderer lacks them. At 2 they are always replaced by tinygrad's polynomials (<a class="src" data-src="tinygrad/helpers.py#L239"></a>). Compare <code>sin/default</code> and <code>sin/transcendental2</code> in chapter 8.</td></tr>
+    <tr><td>DEV</td><td>auto</td><td><code>DEVICE[:RENDERER[:arch]]</code>. <code>DEV=CUDA:PTX</code> selects tinygrad's own PTX renderer instead of CUDA C + NVRTC; <code>DEV=CUDA:NVCC</code> shells out to <code>nvcc</code>. The renderer name is the class name without "Renderer" (<a class="src" data-src="tinygrad/device.py#L368"></a>). The old <code>CUDA_PTX=1</code> spelling now asserts.</td></tr>
+    <tr><td>PARALLEL</td><td>#CPUs</td><td>Size of the compile worker pool (<a class="src" data-src="tinygrad/helpers.py#L269"></a>); 0 compiles in-process. The harness set <code>PARALLEL=0</code> so its <code>graph_rewrite</code> hook sees every pass. VIZ forces 0.</td></tr>
+    <tr><td>NOLOCALS</td><td>0</td><td>No <code>threadIdx</code> dimensions: one global index per thread.</td></tr>
+    <tr><td>SPLIT_REDUCEOP</td><td>1</td><td>Split large reductions into two kernels (<code>REDUCEOP_SPLIT_THRESHOLD</code>, default 32768). <code>sum_all</code> in chapter 5 is the example.</td></tr>
+    <tr><td>CCACHE, SCACHE</td><td>1</td><td>Compile cache (SQLite at <code>CACHEDB</code>, default <code>~/.cache/tinygrad/cache.db</code>, <a class="src" data-src="tinygrad/helpers.py#L398"></a>) and schedule cache. Set to 0 when you want to watch something compile again.</td></tr>
+    <tr><td>JIT</td><td>1</td><td>0 disables TinyJit, 2 keeps the JIT but no CUDA graphs.</td></tr>
+  </table>
+  <div class="bars" data-keys="matmul/noopt,matmul/default,matmul/beam2,matmul/torch:eager" data-labels="NOOPT=1|heuristics (default)|BEAM=2|PyTorch (cuBLAS)" data-title="One switch, 166× apart: 1024³ fp32 matmul on the L4"></div>
+
+  <h2>Rendering CUDA for an L4 without a GPU</h2>
+  <p>Most of the codegen in this book can be studied on any machine. tinygrad has a <code>NULL</code> device that accepts any renderer class (<a class="src" data-src="tinygrad/runtime/ops_null.py#L56"></a>) and "runs" kernels by doing nothing. Two obstacles remain. <code>CUDARenderer</code> loads <code>libnvrtc</code> in its constructor (<a class="src" data-src="tinygrad/renderer/cstyle.py#L402"></a>), so <code>DEV=NULL:CUDA:sm_89</code> fails with <code>failed to load library nvrtc</code>. <code>NVCCRenderer</code> is a subclass that renders identical C and only calls <code>nvcc</code> when it compiles, so we pick it and replace its compiler with the base <code>Compiler</code>, whose <code>compile</code> just returns the source bytes (<a class="src" data-src="tinygrad/device.py#L304"></a>):</p>
+  <pre class="code static" data-lang="python">
+# DEV=NULL:NVCC:sm_89 DEBUG=4 PARALLEL=0 python null_cuda.py
+from tinygrad import Tensor, Device
+from tinygrad.device import Compiler
+Device[Device.DEFAULT].renderer.compiler = Compiler()   # "binary" = source bytes; nvcc is never called
+a, b = Tensor.empty(1024, 1024), Tensor.empty(1024, 1024)
+(a + b).realize()
+</pre>
+  <p>We ran exactly this while writing the book. It printed <code>E_8192_32_4 opts: (Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.LOCAL, axis=0, arg=32))</code>, and the CUDA source matches the L4 capture byte for byte except for a trailing newline. Codegen depends only on the renderer and the arch string, not on the GPU being present. Use <code>Tensor.empty</code> so nothing is copied in; the NULL device cannot copy out (<code>NULL_ALLOW_COPYOUT</code>). All the env vars above work, so <code>NOOPT</code>, <code>TC</code>, <code>BEAM</code> (fake timings, so not meaningful), <code>VIZ</code> and <code>DEBUG_RANGEIFY</code> can all be explored this way. The reported time is a fake 1 ms.</p>
+  <p>To skip the runtime entirely, call codegen on scheduled ASTs:</p>
+  <pre class="code static" data-lang="python">
+from tinygrad import Tensor
+from tinygrad.helpers import Target
+from tinygrad.uop.ops import Ops
+from tinygrad.device import Compiler
+from tinygrad.renderer.cstyle import NVCCRenderer
+from tinygrad.codegen import to_program
+
+ren = NVCCRenderer(Target("CUDA", "", "sm_89")); ren.compiler = Compiler()
+t = Tensor.empty(1024, 1024) + Tensor.empty(1024, 1024)
+for call in t.schedule_linear().src:
+  if call.src[0].op is Ops.SINK:
+    prg = to_program(call.src[0], ren)            # PROGRAM.src = (SINK, LINEAR, SOURCE, BINARY)
+    print(prg.arg.global_size, prg.arg.local_size, prg.src[2].arg)
+</pre>
+  <p><code>DEV=NULL:PTX:sm_89</code> fails similarly because the PTX renderer wants nvJitLink. The same compiler swap should work, but we did not test it.</p>
+
+  <h2>Below tinygrad: ptxas, cuobjdump, nvdisasm</h2>
+  <p>On the CUDA device tinygrad never sees SASS: it hands PTX to <code>cuModuleLoadData</code>, and the driver compiles it. To look at the machine code yourself, get the PTX (DEBUG=5 prints it; the harness grabs the <code>BINARY</code> uop) and run NVIDIA's offline tools. This is what <code>capture.py</code>'s <code>sass_of</code> did for every kernel in the book:</p>
+  <pre class="code static" data-lang="text">
+$ ptxas -arch=sm_89 -v -o k.cubin k.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'E_8192_32_4' for 'sm_89'
+ptxas info    : Function properties for E_8192_32_4
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers, 376 bytes cmem[0]
+$ cuobjdump -sass k.cubin          # needs nvdisasm on PATH as well
+$ nvdisasm -c k.cubin              # the raw disassembler; -g adds line info if the cubin has it
+$ cuobjdump -res-usage k.cubin     # REG / SHARED / CONSTANT[0] per function (the PyTorch harness used this)
+</pre>
+  <p>How to read <code>ptxas -v</code>:</p>
+  <ul>
+    <li><b>registers</b>: per thread. Together with the block size this caps occupancy. The L4 has 65,536 registers per SM.</li>
+    <li><b>barriers</b>: named barriers used. <code>sum_rows/default</code> reports <code>used 1 barriers, 64 bytes smem</code> for its <code>__syncthreads</code> and its 16-float shared buffer.</li>
+    <li><b>stack frame, spill stores, spill loads</b>: anything nonzero means local memory. <code>sin/default</code> reports a <code>32 bytes stack frame</code>, from the slow path of CUDA's <code>sinf</code> argument reduction (its SASS has <code>STL</code>/<code>LDL</code>; see chapter 8).</li>
+    <li><b>cmem[0]</b>: constant bank 0, which holds the kernel parameters starting at 0x160 on this architecture.</li>
+  </ul>
+  <p>tinygrad can also do this itself: at <code>DEBUG=7</code>, <code>cuda_disassemble</code> writes the binary to a temp file, runs <code>ptxas</code> on it when it is PTX, and prints <code>nvdisasm</code> output (<a class="src" data-src="tinygrad/runtime/support/compiler_cuda.py#L38"></a>). If either tool is missing it prints <code>Failed to generate SASS … Make sure your PATH contains ptxas/nvdisasm</code>. One caution: the SASS from your local <code>ptxas</code> is not guaranteed to match what the driver's JIT produced, because the two can be different versions. The book uses the standalone tool consistently for both frameworks.</p>
+
+  <h2>The PyTorch side</h2>
+  <table class="env">
+    <tr><th>Tool</th><th>What you get</th></tr>
+    <tr><td>torch.profiler</td><td>The CUDA kernels that actually ran, with device times. The book's eager and Inductor kernel lists came from <code>profile(activities=[ProfilerActivity.CUDA])</code>, keeping events with <code>device_type == CUDA</code>. <code>prof.key_averages().table(sort_by="cuda_time_total")</code> gives the summary table. Warm up and <code>torch.cuda.synchronize()</code> first.</td></tr>
+    <tr><td>TORCH_COMPILE_DEBUG=1</td><td>A debug directory per compiled graph: <code>fx_graph_readable.py</code>, <code>fx_graph_transformed.py</code>, <code>ir_pre_fusion.txt</code>, <code>ir_post_fusion.txt</code>, <code>output_code.py</code>. <code>TORCH_COMPILE_DEBUG_DIR</code> chooses the location. This is where the book's FX, IR and output-code tabs come from.</td></tr>
+    <tr><td>TORCH_LOGS</td><td>Logging artifacts by name, for example <code>TORCH_LOGS="graph_code,output_code"</code>. Others include <code>aot_graphs</code>, <code>post_grad_graphs</code>, <code>ir_pre_fusion</code>, <code>ir_post_fusion</code>, <code>fusion</code>, <code>schedule</code>, <code>kernel_code</code>, <code>recompiles</code>, <code>graph_breaks</code>, <code>guards</code>, <code>autotuning</code> and <code>cache</code>. <code>output_code</code> also prints the path of the generated module.</td></tr>
+    <tr><td>run_and_get_code</td><td><code>from torch._inductor.utils import run_and_get_code</code>; <code>result, codes = run_and_get_code(fn, *args)</code> returns one source string per compiled graph, even when the FX graph cache hits. A forward+backward step gives two.</td></tr>
+    <tr><td>TRITON_CACHE_DIR</td><td>Triton's on-disk cache: one directory per compiled kernel variant holding <code>.source</code>, <code>.ttir</code>, <code>.ttgir</code>, <code>.llir</code>, <code>.ptx</code>, <code>.cubin</code> and a <code>.json</code> with <code>num_warps</code>, <code>num_stages</code> and <code>shared</code>. Under Inductor it defaults to a <code>triton/</code> directory inside <code>TORCHINDUCTOR_CACHE_DIR</code> (<code>/tmp/torchinductor_&lt;user&gt;</code>). Autotuning leaves one directory per config, which is why <code>add/torch</code> has two <code>triton_poi_fused_add_0</code> variants.</td></tr>
+    <tr><td>TRITON_KERNEL_DUMP=1</td><td>With <code>TRITON_DUMP_DIR</code>, dumps every IR stage as it compiles. <code>TRITON_ALWAYS_COMPILE=1</code> bypasses the cache. (From the Triton source; the book's harness read the cache directory instead.)</td></tr>
+    <tr><td>cache control</td><td><code>TORCHINDUCTOR_FORCE_DISABLE_CACHES=1</code> (used by the harness) or <code>torch._inductor.utils.fresh_cache()</code>. Without one of them a cache hit skips lowering and no debug files are written. Call <code>torch._dynamo.reset()</code> between experiments in one process.</td></tr>
+  </table>
+  <div class="callout torch"><p>Inductor's names follow a pattern like tinygrad's: <code>triton_poi_*</code> is pointwise, <code>triton_red_*</code> a looped reduction, <code>triton_per_*</code> a "persistent" reduction that fits in one block, and <code>triton_tem_*</code> a template kernel such as a Triton matmul. The suffix lists the fused ATen ops (<code>fused_add_mul_relu</code>), and the trailing number makes the name unique. A matmul under default settings has no Triton kernel at all: the output code calls <code>extern_kernels.mm</code>, which is cuBLAS (<code>ampere_sgemm_128x64_nn</code> in <code>matmul/torch</code>).</p></div>
+
+  <h2>How this book captured everything</h2>
+  <p><code>harness/capture.py</code> runs one example per process, so env vars and caches start fresh, and records every stage. Its central trick is a hook on <code>graph_rewrite</code>. Each tinygrad module imports <code>graph_rewrite</code> by name (<code>from tinygrad.uop.ops import graph_rewrite</code>), so patching <code>tinygrad.uop.ops.graph_rewrite</code> alone would not be seen by the callers. The harness therefore replaces the name in each module that uses it, and tags each module with a stage:</p>
+  <pre class="code static" data-lang="python">
+STAGE_OF_MODULE = {"tinygrad.tensor": "tensor", "tinygrad.schedule": "schedule", "tinygrad.schedule.rangeify": "schedule",
+                   "tinygrad.schedule.indexing": "schedule", "tinygrad.schedule.multi": "schedule",
+                   "tinygrad.codegen": "codegen", "tinygrad.codegen.opt.postrange": "codegen", "tinygrad.engine.realize": "program"}
+
+def make_hook(module):
+  stage = STAGE_OF_MODULE[module]
+  def hooked(sink, pm, ctx=None, bottom_up=False, name=None, **kw):
+    out = orig(sink, pm, ctx=ctx, bottom_up=bottom_up, name=name, **kw)   # run the real pass
+    if stage == "codegen" and name == "multi_pm":       # first pass of full_rewrite_to_sink: a new kernel starts
+      kernels.append({"ast": clip(render(sink))})
+    rec = {"stage": stage, "name": name, "nodes": len(out.toposort()), "changed": out is not sink, ...}
+    if name == "linearize/render" and out.op is Ops.PROGRAM: grab_program(out)   # uops, source, PTX
+    elif out is not sink: rec["ir"] = clip(pyrender(out))                       # IR after the pass
+    passes.append(rec)
+    return out
+  return hooked
+
+for module in STAGE_OF_MODULE:
+  m = importlib.import_module(module)
+  if hasattr(m, "graph_rewrite"): m.graph_rewrite = make_hook(module)
+</pre>
+  <p>Some details that make it work:</p>
+  <ul>
+    <li><b>Identity tells you whether a pass changed anything.</b> UOps are hash-consed: building the same node twice returns the same object. So if <code>out is sink</code> after a pass, the pass did nothing, and the harness stores no IR for it. That is the "faded bar" in every pass stepper.</li>
+    <li><b>Kernels are delimited by <code>multi_pm</code></b>, the first named pass of <code>full_rewrite_to_sink</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L295"></a>). Its input is the kernel AST.</li>
+    <li><b><code>linearize/render</code> returns a <code>PROGRAM</code></b> whose sources are <code>(SINK, LINEAR, SOURCE, BINARY)</code> (<a class="src" data-src="tinygrad/codegen/__init__.py#L488"></a>). <code>grab_program</code> reads the name, launch sizes and applied opts from them, prints the LINEAR as the uop table, and keeps the source and the binary. On CUDA the binary is NVRTC's PTX.</li>
+    <li><b><code>PARALLEL=0</code></b> keeps compilation in the process. Otherwise worker processes would run codegen where the hook does not reach.</li>
+    <li><b>Timing</b> reruns the same graph five times under <code>Context(DEBUG=2)</code>, captures stdout, parses the <code>***</code> lines, and keeps each kernel's minimum.</li>
+    <li><b>BEAM</b> compiles many candidates through the same passes. The harness keeps only the last compile of each kernel name, which is the winner, and drops the rest.</li>
+    <li><b>SASS</b>: <code>sass_of</code> runs <code>ptxas -arch=sm_89 -v</code> and <code>cuobjdump -sass</code> on the PTX, as above. <code>build_data.py</code> later strips the hex encodings, counts opcodes for the instruction-mix charts, and extracts register counts.</li>
+    <li><b>Checking</b>: the output is compared with a numpy reference, and every capture in the book matched.</li>
+  </ul>
+  <p>The hook sees only passes that go through <code>graph_rewrite</code>. <code>apply_opts</code>' <code>shift_to</code> substitutions and <code>memory_coalescing</code> use <code>substitute</code> (<a class="src" data-src="tinygrad/codegen/opt/postrange.py#L96"></a>), so they appear in VIZ but not in our steppers. Their effects show up in the next named pass (<em>flatten range</em> and <em>add images</em>).</p>
+
+  <h2>Cheat sheet: reading PTX</h2>
+  <p>PTX is a typed, virtual, infinite-register assembly. Most of it follows a few rules:</p>
+  <table class="env">
+    <tr><th>Syntax</th><th>Meaning</th><th>Example from the captures</th></tr>
+    <tr><td>.entry name(.param …)</td><td>a kernel; params are read with <code>ld.param</code></td><td><code>.visible .entry E_8192_32_4(.param .u64 E_8192_32_4_param_0, …)</code></td></tr>
+    <tr><td>.maxntid / .reqntid</td><td>max / required threads per block (<code>__launch_bounds__</code>, Triton's <code>num_warps*32</code>)</td><td><code>.maxntid 32, 1, 1</code> vs Triton's <code>.reqntid 128</code></td></tr>
+    <tr><td>%r %rd %f %p</td><td>nvcc/NVRTC register names: 32-bit int, 64-bit, float, predicate. tinygrad's PTX renderer names them by role instead: <code>%alu_f32_0</code>, <code>%val_f32_4</code>, <code>%bidx_u64_0</code></td><td><code>.reg .f32 %f&lt;21&gt;;</code> declares %f0..%f20</td></tr>
+    <tr><td>%ctaid.x, %tid.x</td><td>blockIdx.x, threadIdx.x</td><td><code>mov.u32 %r1, %ctaid.x;</code></td></tr>
+    <tr><td>op.type</td><td>the type suffix is part of the opcode</td><td><code>add.f32</code>, <code>add.s64</code>, <code>shl.b32</code></td></tr>
+    <tr><td>.global .shared .param</td><td>state space of a load/store</td><td><code>ld.global.v4.f32 {%f1, %f2, %f3, %f4}, [%rd8];</code></td></tr>
+    <tr><td>.v2 .v4</td><td>vector access: 8 or 16 bytes in one instruction</td><td><code>st.global.v4.f32 [%rd10], {%f20, %f19, %f18, %f17};</code></td></tr>
+    <tr><td>cvta.to.global</td><td>generic → global address (NVRTC emits it; tinygrad's PTX doesn't)</td><td><code>cvta.to.global.u64 %rd4, %rd1;</code></td></tr>
+    <tr><td>mul.wide.s32</td><td>32×32 → 64-bit multiply: index → byte offset</td><td><code>mul.wide.s32 %rd7, %r5, 4;</code></td></tr>
+    <tr><td>mad.lo / fma.rn</td><td>multiply-add (integer low half / float, round-to-nearest)</td><td>tinygrad PTX: <code>mad.lo.s32 %alu_s32_1, %gidx0, %cast_s32_4, %alu_s32_0;</code></td></tr>
+    <tr><td>setp + @p</td><td>set a predicate, then guard an instruction or branch with it</td><td><code>setp.lt.s32 %p1, …; @%p1 bra LOOP;</code></td></tr>
+    <tr><td>ex2.approx, sin.approx</td><td>special-function unit instructions (become <code>MUFU</code>)</td><td>chapter 8</td></tr>
+    <tr><td>bar.sync 0</td><td><code>__syncthreads()</code></td><td>reductions, chapter 5</td></tr>
+    <tr><td>mma.sync.aligned.m16n8k16…</td><td>warp-wide tensor-core multiply-accumulate</td><td>chapter 7</td></tr>
+  </table>
+
+  <h2>Cheat sheet: reading SASS</h2>
+  <p>SASS is the real ISA. For sm_89 each instruction is 16 bytes: an opcode and operands in the low 64 bits, and in the high bits a <em>control code</em>: stall counts and dependency-barrier bits that the compiler, not the hardware, chooses to schedule instructions. NVIDIA does not document the encoding. The field layout below is the one reverse engineered in public research on Volta and later GPUs. Our decoding of the capture is self-consistent: the barrier that each <code>LDG</code> sets is exactly the one that its first consumer waits on.</p>
+  <table class="env">
+    <tr><th>Pattern</th><th>Meaning</th></tr>
+    <tr><td>R0…R254, RZ</td><td>32-bit per-thread registers; <code>RZ</code> reads as zero. <code>R2.64</code> is the pair R2:R3 used as a 64-bit address.</td></tr>
+    <tr><td>UR4, URZ, ULDC</td><td>uniform registers: one value for the whole warp, held once. <code>ULDC.64 UR4, c[0x0][0x118]</code> loads a 64-bit value from constant memory into UR4:UR5. Here it is the global memory descriptor that every <code>.E</code> access uses implicitly.</td></tr>
+    <tr><td>P0…P6, PT, !P0</td><td>predicate registers; <code>PT</code> is true. <code>@P0 EXIT</code> runs only where P0 is set; <code>@!P0</code> where it is clear.</td></tr>
+    <tr><td>c[0x0][0x160]</td><td>constant bank 0, byte offset 0x160: the first kernel parameter on this architecture. Parameters are 8-byte pointers in order. <code>c[0x0][0x28]</code> is the initial stack pointer.</td></tr>
+    <tr><td>S2R Rx, SR_CTAID.X / SR_TID.X</td><td>read a special register: blockIdx.x / threadIdx.x. Variable latency, so it sets a scoreboard barrier.</td></tr>
+    <tr><td>LDG / STG .E .128 .64 .U16</td><td>global load/store; <code>.E</code> = 64-bit (extended) address; the size suffix is the access width in bits (no suffix = 32). <code>.CONSTANT</code> = read-only path.</td></tr>
+    <tr><td>LDS / STS, LDL / STL</td><td>shared memory / thread-local (stack or spill) memory.</td></tr>
+    <tr><td>FADD FMUL FFMA FSETP FMNMX</td><td>fp32 add, multiply, fused multiply-add, compare-to-predicate, min/max.</td></tr>
+    <tr><td>IMAD IADD3 LEA SHF LOP3.LUT</td><td>integer multiply-add (also used as a plain move, <code>IMAD.MOV</code>), 3-input add, shift-and-add, funnel shift, any 3-input bitwise function given by an 8-bit truth table (<code>0xc0</code> = a AND b).</td></tr>
+    <tr><td>IMAD.WIDE</td><td>32×32+64 → 64: the classic <code>base + index*4</code> address computation.</td></tr>
+    <tr><td>MUFU.EX2 .RCP .SIN …</td><td>the multi-function unit: approximate transcendentals (chapter 8).</td></tr>
+    <tr><td>HMMA.16816.F32</td><td>tensor-core matrix multiply-accumulate, m16n8k16, fp32 accumulate (chapter 7). <code>matmul_fp16/default</code> has 16 of them in its inner loop.</td></tr>
+    <tr><td>BAR.SYNC.DEFER_BLOCKING</td><td><code>__syncthreads()</code>.</td></tr>
+    <tr><td>BSSY / BSYNC</td><td>mark divergence and reconvergence points around branches.</td></tr>
+    <tr><td>.reuse</td><td>operand reuse cache hint: the same register is read again by the next instruction, so it need not go through the register file again.</td></tr>
+    <tr><td>EXIT; BRA self; NOP</td><td>end of thread, then a branch-to-self and NOPs that pad the code to an alignment boundary.</td></tr>
+  </table>
+  <p>Click any instruction of <code>E_8192_32_4</code> to decode it, including the control code that <code>build_data.py</code> strips from the displayed listings. The raw 128-bit words come from the capture's <code>cuobjdump</code> output. Instructions that depend on the selected one through a scoreboard barrier are highlighted.</p>
+  <div class="anim" id="sassdec"></div>
+  <p>Read the control codes top to bottom and the schedule appears. The two <code>S2R</code>s set barrier 0 and <code>LEA</code> waits on it (wait mask bit 0). Both <code>LDG.E.128</code> set barrier 2, and the first <code>FADD</code> waits on barrier 2. Both loads were issued back to back before it, so their memory latency overlaps. The <code>IMAD.WIDE</code> for the output address sits between the loads and the adds, where it is free. Fixed-latency ALU instructions use the stall count instead of barriers: <code>SHF</code> stalls 5 cycles before the dependent <code>IMAD.WIDE</code> may issue.</p>
+  <div class="callout"><p><b>Where to go next.</b> Every chapter's widgets are built from the same capture files. If you want to check something in the book, the fastest loop is: run your expression with <code>DEV=NULL:NVCC:sm_89 DEBUG=4</code> or <code>VIZ=-1</code> on any machine, and when you need real numbers, run <code>harness/capture.py</code> on a GPU.</p></div>
+</main>
+<script src="assets/book.js"></script><script src="assets/ch11.js"></script></body></html>
